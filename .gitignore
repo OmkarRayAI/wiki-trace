@@ -1,0 +1,58 @@
+# ─── Secrets — NEVER commit ───────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Per-user trace + upload data ─────────────────────────────────────
+# These are populated locally; contributors should not push their PDFs
+# or trace logs into the repo.
+.wikitrace/
+raw/uploads/
+eval/runs/
+
+# Local knowledge pages — each user builds their own.
+# (Sample pages, if any, live in examples/ and are tracked.)
+wiki/*.md
+
+# ─── Build artifacts ──────────────────────────────────────────────────
+.next/
+app/.next/
+app/node_modules/
+node_modules/
+dist/
+build/
+
+# ─── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# ─── Local working dirs (parallel project sandboxes, ignore) ──────────
+.activegraph/
+agpack/
+playground/
+naive/
+ixigo_pack/
+saas/
+artifacts/
+
+# Stale top-level scripts from earlier project sandboxes (not part of
+# wikitrace). Add a specific path to whitelist if you want to track one.
+/query_banking.py
+/run_banking_pack.py
+/run_ixigo_pack.py
+/viz_banking.py
+/viz_ixigo.py
+
+# ─── Tooling local state ──────────────────────────────────────────────
+.impeccable.md
+/tmp/
+*.log
+
+# ─── Editor / OS ──────────────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
