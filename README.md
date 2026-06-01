@@ -177,15 +177,33 @@ PRD.md                 product requirements / pitch
 
 ## Status
 
-This is an early open-source release. Expect rough edges:
+This is v0.1. The honest version of what works:
 
-- **Single-tenant** — built to run on your laptop. Multi-tenant + SAML
-  is on the roadmap.
-- **Authoring eval suites is JSONL** — no UI yet. See [`/docs#evaluations`](http://localhost:3000/docs) once the dev server is running.
-- **Free-tier model rate limits** — if the demo flakes, set
-  `WIKITRACE_MODEL` in `.env` to a paid model.
-- **Browser-only** — the dashboard runs in your browser; mobile is best
-  effort.
+### Works today, no integration changes
+- The wiki layer (drop a PDF, get a curated knowledge page, ask grounded questions)
+- Eval scoring with your own JSONL question suite
+- Activity timelines, citation health detections, page contribution
+
+### Works with ~30 minutes of integration
+Wrap your existing RAG agent with `wikitrace.span()` calls — see
+[`examples/byo_rag.py`](examples/byo_rag.py). Works as long as your
+stack meets these four conditions:
+
+| | |
+|---|---|
+| Language | Python (or willing to write a 30-line shim from another lang) |
+| Chunk IDs | Stable, reusable IDs returned by your retriever (FAISS row IDs, Pinecone vector IDs, doc-id+offset hashes) |
+| Scoring | A judge / eval function that returns `(correct, total)` per cell |
+| Storage | Can write to local disk at `.wikitrace/spans.jsonl` |
+
+### Doesn't yet support — call this out before you adopt
+- **Multi-tenant SaaS RAG** — wiki-trace writes to local disk. A team running RAG across many tenants on Lambda or Vercel Edge needs a remote span ingestion API we haven't shipped yet.
+- **Streaming agents** — the SDK assumes the full answer is materialized before the span closes. Token-streaming agents need a different API shape.
+- **Multi-step agents** (planner → tool → reflect → tool → answer) — today we model one `agent_call` per question; the data model can express step trees, the dashboard can't render them yet.
+- **Non-text retrieval** — image regions, AST nodes, multi-modal. Chunk refs are string-keyed but the dashboard only knows how to render text.
+- **Closed retrieval** — managed services that abstract away the chunks (Bedrock Knowledge Bases, Cohere RAG end-to-end). Without chunk IDs there's nothing to attribute to.
+- **Languages other than Python** — Node/Go/Rust teams currently have to write the JSONL format directly. SDK ports planned.
+- **Compliance-heavy environments** — no encryption-at-rest, no audit signing, no SOC 2. Healthcare/finance/defense should wait.
 
 If you hit something broken, open an issue.
 

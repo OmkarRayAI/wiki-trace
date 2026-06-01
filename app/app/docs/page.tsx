@@ -24,6 +24,7 @@ export default function Docs() {
             <TocLink href="#activity" label="Activity" indent />
             <TocLink href="#how-to" label="How-to guides" />
             <TocLink href="#bring-your-own-rag" label="Bring your own RAG" />
+            <TocLink href="#byo-requirements" label="Requirements" indent />
             <TocLink href="#shortcuts" label="Keyboard shortcuts" />
             <TocLink href="#faq" label="FAQ" />
             <TocLink href="#privacy" label="Privacy & security" />
@@ -186,6 +187,47 @@ export default function Docs() {
               it. wiki-trace adds the quality dashboard your retriever
               doesn't have without changing how you retrieve or generate.
             </p>
+
+            <Subsection id="byo-requirements" title="Requirements (read first)">
+              <p>
+                Not every RAG stack works today. Check these four
+                conditions before you spend time integrating:
+              </p>
+              <ul className="list-disc pl-5 space-y-2 mt-3">
+                <li>
+                  <strong>Python</strong>, or willing to write a 30-line
+                  JSONL-emitter shim in your language of choice. Node/Go/Rust
+                  ports are planned but not shipped.
+                </li>
+                <li>
+                  <strong>Stable, reusable chunk IDs</strong> from your
+                  retriever — FAISS row indices, Pinecone vector IDs,
+                  doc-id+offset hashes. If your IDs regenerate every run,
+                  page-contribution metrics are meaningless; fix that
+                  first.
+                </li>
+                <li>
+                  <strong>A scoring function</strong> that returns{" "}
+                  <code className="mono text-[12px]">(correct, total)</code>{" "}
+                  per answer cell. LLM-as-judge, regex matchers, manual
+                  labels — anything works as long as it produces those two
+                  numbers.
+                </li>
+                <li>
+                  <strong>Local disk write access</strong> for{" "}
+                  <code className="mono text-[12px]">.wikitrace/spans.jsonl</code>.
+                  Lambda / Vercel Edge / read-only environments need a
+                  remote span backend we haven't shipped yet.
+                </li>
+              </ul>
+              <p className="mt-3">
+                Also: closed retrieval services that hide their chunks
+                (e.g. Bedrock Knowledge Bases end-to-end mode) won't work
+                — without chunk IDs, contribution attribution has nothing
+                to attribute to. Use the same service in retrieval-only
+                mode if available.
+              </p>
+            </Subsection>
 
             <Subsection id="byo-what-you-get" title="What you get">
               <ul className="list-disc pl-5 space-y-1.5">
