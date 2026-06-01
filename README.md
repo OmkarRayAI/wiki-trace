@@ -45,12 +45,14 @@ npm run dev
 
 That's it. Drop a PDF in the Playground; ask a question; see citations.
 
-You can also use the Python harness directly:
+If you're already running a RAG pipeline (LangChain, custom, anything),
+**you don't need the dashboard to start.** Just install the SDK:
 
 ```bash
-# Run a scan + risk audit on the wiki/ directory
-python -m wikitrace all
+pip install 'wikitrace[langchain]'   # or just `wikitrace` for the manual SDK
 ```
+
+…and skip to [Bring your own RAG](#bring-your-own-rag) below.
 
 ---
 
@@ -78,10 +80,38 @@ Already running a RAG pipeline? Don't replace it. Wrap it. wiki-trace
 adds the quality dashboard your retriever doesn't have without changing
 how you retrieve or generate.
 
+### LangChain — one line of config
+
+```bash
+pip install 'wikitrace[langchain]'
+```
+
+```python
+from wikitrace.langchain import WikitraceCallbackHandler
+
+handler = WikitraceCallbackHandler(agent_name="my-rag", qid="q1")
+
+answer = chain.invoke(
+    {"query": "..."},
+    config={"callbacks": [handler]},   # ← that's it
+)
+handler.flush()
+```
+
+Every retrieval becomes a chunk citation. Every LLM call captures the
+model + prompt size. Every chain run becomes one `agent_call` span,
+with `chunk_refs` populated automatically from your Documents'
+metadata. Runnable example: [`examples/langchain_rag.py`](examples/langchain_rag.py).
+
+### Any other framework — manual span
+
+If you're not on LangChain (or you want explicit control), wrap each
+agent call yourself:
+
 ```python
 import wikitrace
 
-wikitrace.init(pipeline="eval", attrs={"run_id": "..."})
+wikitrace.init(pipeline="eval")
 
 with wikitrace.span("eval", run_id=run_id):
     for q in questions:
@@ -103,12 +133,13 @@ with wikitrace.span("eval", run_id=run_id):
 wikitrace.end()
 ```
 
-That's the whole integration. A complete runnable example ships at
-[`examples/byo_rag.py`](examples/byo_rag.py) — fake retriever + fake
-LLM, so you can see it work without external API keys.
+Complete runnable example: [`examples/byo_rag.py`](examples/byo_rag.py).
 
-After running, open `/traces` to see the run, and `/evals` to see the
-chunk-contribution table populate.
+After running either, open `/traces` to see the run and `/evals` to see
+the chunk-contribution table populate.
+
+> **LlamaIndex, OpenAI Assistants, Haystack** — handlers planned. File
+> an issue with your stack and we'll prioritize.
 
 ---
 
@@ -184,8 +215,13 @@ This is v0.1. The honest version of what works:
 - Eval scoring with your own JSONL question suite
 - Activity timelines, citation health detections, page contribution
 
+### Works with one line of config
+**LangChain** users — drop in `WikitraceCallbackHandler` and every
+chain invocation becomes a wiki-trace span. See
+[`examples/langchain_rag.py`](examples/langchain_rag.py).
+
 ### Works with ~30 minutes of integration
-Wrap your existing RAG agent with `wikitrace.span()` calls — see
+Other frameworks — wrap your agent with `wikitrace.span()` calls. See
 [`examples/byo_rag.py`](examples/byo_rag.py). Works as long as your
 stack meets these four conditions:
 
@@ -203,6 +239,7 @@ stack meets these four conditions:
 - **Non-text retrieval** — image regions, AST nodes, multi-modal. Chunk refs are string-keyed but the dashboard only knows how to render text.
 - **Closed retrieval** — managed services that abstract away the chunks (Bedrock Knowledge Bases, Cohere RAG end-to-end). Without chunk IDs there's nothing to attribute to.
 - **Languages other than Python** — Node/Go/Rust teams currently have to write the JSONL format directly. SDK ports planned.
+- **Frameworks beyond LangChain** — LlamaIndex, OpenAI Assistants, Haystack, CrewAI handlers planned. The manual `wikitrace.span()` path works in the meantime.
 - **Compliance-heavy environments** — no encryption-at-rest, no audit signing, no SOC 2. Healthcare/finance/defense should wait.
 
 If you hit something broken, open an issue.
