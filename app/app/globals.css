@@ -251,4 +251,129 @@
     .rise { animation: none !important; }
     * { transition: none !important; }
   }
+
+  /* ─── obs-theme: dark observability dashboard ──────────────────────────
+     Scoped to wrappers with class="obs-theme". The Observability route
+     group (Requests, Sessions, Users, Properties) renders against a
+     dark slate canvas so it reads like the dense LLM-ops dashboards
+     teams already know. The rest of the app stays in the warm cream
+     aesthetic. */
+  .obs-theme {
+    /* slate-950 / slate-900 family. Cool, not pitch black. */
+    background: oklch(0.18 0.014 250);
+    background-image:
+      radial-gradient(1200px 600px at 60% -10%, oklch(0.22 0.020 260) 0%, transparent 60%),
+      linear-gradient(180deg, oklch(0.18 0.014 250) 0%, oklch(0.16 0.012 250) 100%);
+    color: oklch(0.85 0.008 240);
+    min-height: 100vh;
+  }
+  .obs-theme h1, .obs-theme h2, .obs-theme h3 { color: oklch(0.97 0.006 240); }
+  /* Override the cream theme's inline ink classes inside obs-theme. */
+  .obs-theme .text-ink-900 { color: oklch(0.97 0.006 240); }
+  .obs-theme .text-ink-700 { color: oklch(0.85 0.008 240); }
+  .obs-theme .text-ink-600 { color: oklch(0.75 0.008 240); }
+  .obs-theme .text-ink-500 { color: oklch(0.62 0.010 240); }
+  .obs-theme .text-ink-300 { color: oklch(0.45 0.014 245); }
+  .obs-theme .eyebrow {
+    color: oklch(0.66 0.14 30);
+  }
+
+  /* Glass surfaces inside obs-theme become dark cards. */
+  .obs-theme .glass {
+    background: oklch(0.22 0.014 245 / 0.7);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    border: 1px solid oklch(0.32 0.014 245 / 0.7);
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.04),
+      0 1px 1px oklch(0 0 0 / 0.30),
+      0 8px 24px oklch(0 0 0 / 0.30);
+  }
+
+  .obs-theme .mono { color: oklch(0.82 0.010 240); }
+  .obs-theme .link {
+    color: oklch(0.78 0.13 30);
+    text-decoration-color: oklch(0.78 0.13 30 / 0.4);
+  }
+
+  /* Table-ish rows inside obs-theme: denser, sharper hover. */
+  .obs-theme .obs-table-head {
+    background: oklch(0.20 0.014 250 / 0.85);
+    color: oklch(0.65 0.010 240);
+    border-bottom: 1px solid oklch(0.30 0.014 245 / 0.5);
+  }
+  .obs-theme .obs-row {
+    border-top: 1px solid oklch(0.28 0.014 245 / 0.4);
+    transition: background 120ms ease-out;
+  }
+  .obs-theme .obs-row:first-child { border-top: 0; }
+  .obs-theme .obs-row:hover {
+    background: oklch(0.28 0.020 250 / 0.6);
+  }
+  .obs-theme .obs-row-cell-strong { color: oklch(0.97 0.006 240); }
+  .obs-theme .obs-row-cell-mid    { color: oklch(0.82 0.008 240); }
+  .obs-theme .obs-row-cell-mute   { color: oklch(0.62 0.008 240); }
+
+  /* Filter chips inside obs-theme. Pill = inactive, pill-on = active. */
+  .obs-theme .obs-chip {
+    background: oklch(0.26 0.014 245 / 0.7);
+    color: oklch(0.78 0.010 240);
+    border: 1px solid oklch(0.34 0.014 245 / 0.7);
+  }
+  .obs-theme .obs-chip:hover {
+    background: oklch(0.30 0.020 245 / 0.85);
+    border-color: oklch(0.40 0.020 245 / 0.85);
+  }
+  .obs-theme .obs-chip-active {
+    background: oklch(0.62 0.18 35);
+    color: white;
+    border-color: oklch(0.72 0.18 38 / 0.6);
+    box-shadow: 0 1px 2px oklch(0 0 0 / 0.30), 0 6px 16px oklch(0.45 0.16 35 / 0.30);
+  }
+
+  /* JSON inspector blocks. */
+  .obs-theme .obs-json {
+    background: oklch(0.14 0.012 250);
+    border: 1px solid oklch(0.28 0.014 245 / 0.6);
+    color: oklch(0.85 0.010 240);
+  }
+
+  /* Status dots */
+  .obs-dot-ok  { background: oklch(0.72 0.16 155); box-shadow: 0 0 6px oklch(0.72 0.16 155 / 0.5); }
+  .obs-dot-err { background: oklch(0.66 0.21 25);  box-shadow: 0 0 6px oklch(0.66 0.21 25 / 0.5);  }
+
+  /* Stat tiles (4-up header on detail pages). */
+  .obs-theme .obs-stat {
+    background: oklch(0.22 0.014 245 / 0.7);
+    border: 1px solid oklch(0.32 0.014 245 / 0.6);
+    border-radius: 14px;
+  }
+  .obs-theme .obs-stat-label {
+    color: oklch(0.62 0.010 240);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    font-size: 10.5px;
+    font-weight: 600;
+  }
+  .obs-theme .obs-stat-value {
+    color: oklch(0.97 0.006 240);
+    font-feature-settings: "tnum";
+  }
+
+  /* In obs-theme the sidebar should also flip dark so the page doesn't
+     look like a UI cut in half. The Sidebar.tsx component uses
+     glass-floating; we override that inside obs-theme. */
+  .obs-theme .glass-floating {
+    background: oklch(0.20 0.014 250 / 0.92);
+    border: 1px solid oklch(0.30 0.014 245 / 0.7);
+    box-shadow:
+      inset 0 1px 0 oklch(1 0 0 / 0.04),
+      0 12px 32px oklch(0 0 0 / 0.40);
+  }
+  /* Sidebar inactive nav links: cream theme default, dark theme override. */
+  .nav-link-inactive { color: oklch(0.40 0.012 40); }
+  .obs-theme .nav-link-inactive { color: oklch(0.78 0.010 240); }
+  .obs-theme .glass-floating nav a:hover {
+    background: oklch(0.28 0.020 245 / 0.5);
+  }
 }

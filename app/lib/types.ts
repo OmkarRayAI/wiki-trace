@@ -48,6 +48,30 @@ export type PageRow = {
 
 export type RawFile = { path: string; size: number; mtime: number };
 
+/** One LLM request as Helicone would log it. Built from llm_call spans. */
+export type RequestRow = {
+  span_id: string;
+  trace_id: string;
+  start_ts: number;
+  end_ts: number | null;
+  model: string;
+  provider?: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number | null;
+  latency_ms: number | null;
+  ttft_ms?: number | null;
+  status: "ok" | "error";
+  user_id?: string;
+  session_id?: string;
+  session_name?: string;
+  session_path?: string;
+  cache_enabled?: boolean;
+  prompt_id?: string;
+  properties: Record<string, string>;
+};
+
 export type Finding = {
   rule: string;
   page: string;

@@ -10,6 +10,7 @@ import type {
   EvalRow,
   EvalRun,
   PageContrib,
+  RequestRow,
 } from "./types";
 
 const SPANS = path.join(TRACE_DIR, "spans.jsonl");
@@ -406,6 +407,317 @@ export function fanIn(opts?: { includeInternal?: boolean }): Record<string, stri
 
 export function spansForTrace(traceId: string): Span[] {
   return loadSpans().filter((s) => s.trace_id === traceId);
+}
+
+/** Project an llm_call span into a Helicone-shaped RequestRow. */
+function spanToRequestRow(s: Span): RequestRow {
+  const a = s.attrs ?? {};
+  const input = Number(a.input_tokens ?? 0);
+  const output = Number(a.output_tokens ?? 0);
+  const latency =
+    a.latency_ms != null
+      ? Number(a.latency_ms)
+      : s.end_ts != null
+        ? Math.round((s.end_ts - s.start_ts) * 1000)
+        : null;
+  // Helicone-Property-* arrives Title-Cased (Python http.server.headers).
+  // Normalize keys to lower for filtering, but keep the originals visible.
+  const props: Record<string, string> = {};
+  for (const [k, v] of Object.entries((a.properties ?? {}) as Record<string, any>)) {
+    props[String(k)] = String(v);
+  }
+  return {
+    span_id: s.id,
+    trace_id: s.trace_id,
+    start_ts: s.start_ts,
+    end_ts: s.end_ts,
+    model: String(a.model ?? "unknown"),
+    provider: a.provider ? String(a.provider) : undefined,
+    input_tokens: input,
+    output_tokens: output,
+    total_tokens: input + output,
+    cost_usd: a.cost_usd != null ? Number(a.cost_usd) : null,
+    latency_ms: latency,
+    ttft_ms: a.ttft_ms != null ? Number(a.ttft_ms) : null,
+    status: s.status,
+    user_id: a.user_id ? String(a.user_id) : undefined,
+    session_id: a.session_id ? String(a.session_id) : undefined,
+    session_name: a.session_name ? String(a.session_name) : undefined,
+    session_path: a.session_path ? String(a.session_path) : undefined,
+    cache_enabled: typeof a.cache_enabled === "boolean" ? a.cache_enabled : undefined,
+    prompt_id: a.prompt_id ? String(a.prompt_id) : undefined,
+    properties: props,
+  };
+}
+
+export type RequestFilter = {
+  model?: string;
+  user?: string;
+  session?: string;
+  property?: { key: string; value: string };
+  status?: "ok" | "error";
+};
+
+/** All llm_call spans, newest first, optionally filtered. */
+export function loadRequests(filter?: RequestFilter): RequestRow[] {
+  const rows = loadSpans()
+    .filter((s) => s.name === "llm_call")
+    .map(spanToRequestRow)
+    .sort((a, b) => b.start_ts - a.start_ts);
+  if (!filter) return rows;
+  return rows.filter((r) => {
+    if (filter.model && r.model !== filter.model) return false;
+    if (filter.user && r.user_id !== filter.user) return false;
+    if (filter.session && r.session_id !== filter.session) return false;
+    if (filter.status && r.status !== filter.status) return false;
+    if (filter.property) {
+      const v = r.properties[filter.property.key];
+      if (v !== filter.property.value) return false;
+    }
+    return true;
+  });
+}
+
+export type SessionRollup = {
+  session_id: string;
+  session_name?: string;
+  user_id?: string;
+  request_count: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  start_ts: number;
+  end_ts: number;
+  models: string[];
+};
+
+export function sessionRollups(): SessionRollup[] {
+  const out: Record<string, SessionRollup> = {};
+  for (const r of loadRequests()) {
+    if (!r.session_id) continue;
+    const slot =
+      out[r.session_id] ??
+      (out[r.session_id] = {
+        session_id: r.session_id,
+        session_name: r.session_name,
+        user_id: r.user_id,
+        request_count: 0,
+        total_tokens: 0,
+        total_cost_usd: 0,
+        start_ts: r.start_ts,
+        end_ts: r.end_ts ?? r.start_ts,
+        models: [],
+      });
+    slot.request_count += 1;
+    slot.total_tokens += r.total_tokens;
+    slot.total_cost_usd += r.cost_usd ?? 0;
+    slot.start_ts = Math.min(slot.start_ts, r.start_ts);
+    slot.end_ts = Math.max(slot.end_ts, r.end_ts ?? r.start_ts);
+    if (!slot.models.includes(r.model)) slot.models.push(r.model);
+    if (!slot.session_name && r.session_name) slot.session_name = r.session_name;
+    if (!slot.user_id && r.user_id) slot.user_id = r.user_id;
+  }
+  return Object.values(out).sort((a, b) => b.end_ts - a.end_ts);
+}
+
+export type UserRollup = {
+  user_id: string;
+  request_count: number;
+  total_tokens: number;
+  total_cost_usd: number;
+  last_seen: number;
+  models: string[];
+};
+
+export function userRollups(): UserRollup[] {
+  const out: Record<string, UserRollup> = {};
+  for (const r of loadRequests()) {
+    if (!r.user_id) continue;
+    const slot =
+      out[r.user_id] ??
+      (out[r.user_id] = {
+        user_id: r.user_id,
+        request_count: 0,
+        total_tokens: 0,
+        total_cost_usd: 0,
+        last_seen: r.start_ts,
+        models: [],
+      });
+    slot.request_count += 1;
+    slot.total_tokens += r.total_tokens;
+    slot.total_cost_usd += r.cost_usd ?? 0;
+    slot.last_seen = Math.max(slot.last_seen, r.start_ts);
+    if (!slot.models.includes(r.model)) slot.models.push(r.model);
+  }
+  return Object.values(out).sort((a, b) => b.last_seen - a.last_seen);
+}
+
+export type PropertyRollup = {
+  key: string;
+  value: string;
+  request_count: number;
+  total_cost_usd: number;
+};
+
+export function propertyRollups(): PropertyRollup[] {
+  const out: Record<string, PropertyRollup> = {};
+  for (const r of loadRequests()) {
+    for (const [k, v] of Object.entries(r.properties)) {
+      const id = `${k}=${v}`;
+      const slot =
+        out[id] ??
+        (out[id] = {
+          key: k,
+          value: v,
+          request_count: 0,
+          total_cost_usd: 0,
+        });
+      slot.request_count += 1;
+      slot.total_cost_usd += r.cost_usd ?? 0;
+    }
+  }
+  return Object.values(out).sort((a, b) => b.request_count - a.request_count);
+}
+
+export function distinctModels(): string[] {
+  const set = new Set<string>();
+  for (const r of loadRequests()) set.add(r.model);
+  return Array.from(set).sort();
+}
+
+/** Locate the raw llm_call span for the inspector drawer. */
+export function requestSpanById(spanId: string): Span | null {
+  return loadSpans().find((s) => s.id === spanId && s.name === "llm_call") ?? null;
+}
+
+/** Catalog of built-in judges from wikitrace.judges. Surfaced even when
+ *  no runs have used them yet so the Evaluators page has content out of
+ *  the box. Mirrors what the Python module exports. */
+export const BUILTIN_JUDGES: { name: string; kind: "deterministic" | "llm"; description: string }[] = [
+  { name: "exact_match",           kind: "deterministic", description: "Output equals expected (case-insensitive)." },
+  { name: "contains_all",          kind: "deterministic", description: "One point per expected substring found." },
+  { name: "regex_match",           kind: "deterministic", description: "Any expected regex pattern matches." },
+  { name: "length_within",         kind: "deterministic", description: "Output length within [min, max]." },
+  { name: "contains_none",         kind: "deterministic", description: "No forbidden phrase appears (banned words, leaks)." },
+  { name: "json_valid",            kind: "deterministic", description: "Output parses as JSON (strips Markdown fences)." },
+  { name: "schema_match",          kind: "deterministic", description: "Output matches a JSON-schema-style shape." },
+  { name: "sql_valid",             kind: "deterministic", description: "Output parses as a valid SQL statement." },
+  { name: "no_pii",                kind: "deterministic", description: "No email, phone, SSN, credit card, or API key leaks." },
+  { name: "levenshtein_threshold", kind: "deterministic", description: "Sequence-match similarity ≥ threshold." },
+  { name: "embedding_cosine",      kind: "llm",           description: "Cosine similarity to expected via embeddings." },
+  { name: "llm_classify",          kind: "llm",           description: "LLM picks one class from a fixed list." },
+  { name: "llm_judge",             kind: "llm",           description: "LLM grades output 0/1 against a rubric." },
+  { name: "hallucination",         kind: "llm",           description: "LLM grades whether answer is grounded in truth." },
+  { name: "rag_faithfulness",      kind: "llm",           description: "LLM grades whether answer is supported by context." },
+  { name: "rag_context_precision", kind: "llm",           description: "LLM grades whether retrieved context is relevant." },
+  { name: "toxicity",              kind: "llm",           description: "LLM grades safety (1=safe, 0=toxic)." },
+  { name: "instruction_following", kind: "llm",           description: "LLM grades whether answer follows an instruction." },
+];
+
+export type JudgeRollup = {
+  name: string;
+  kind: "deterministic" | "llm" | "custom";
+  description: string;
+  rows_scored: number;
+  correct: number;
+  total: number;
+  pass_rate: number;
+  runs: number;
+  last_seen: number | null;
+};
+
+export type JudgeScoredRow = {
+  span_id: string;
+  trace_id: string;
+  qid: string;
+  judge: string;
+  correct: number;
+  total: number;
+  score: number;
+  detail: Record<string, any>;
+  ts: number;
+};
+
+/** Aggregate `judge` spans into a per-judge catalog, joined with the
+ *  built-in catalog so unused judges still appear (with zeros). */
+export function judgeRollups(): JudgeRollup[] {
+  const out: Record<string, JudgeRollup> = {};
+  for (const j of BUILTIN_JUDGES) {
+    out[j.name] = {
+      name: j.name,
+      kind: j.kind,
+      description: j.description,
+      rows_scored: 0,
+      correct: 0,
+      total: 0,
+      pass_rate: 0,
+      runs: 0,
+      last_seen: null,
+    };
+  }
+
+  const runsTouched: Record<string, Set<string>> = {};
+  for (const s of loadSpans()) {
+    if (s.name !== "judge") continue;
+    const a = s.attrs ?? {};
+    const name = String(a.judge ?? "judge");
+    const slot =
+      out[name] ??
+      (out[name] = {
+        name,
+        kind: "custom",
+        description: "Custom judge.",
+        rows_scored: 0,
+        correct: 0,
+        total: 0,
+        pass_rate: 0,
+        runs: 0,
+        last_seen: null,
+      });
+    slot.rows_scored += 1;
+    slot.correct += Number(a.correct ?? 0);
+    slot.total += Number(a.total ?? 0);
+    slot.last_seen = slot.last_seen == null ? s.start_ts : Math.max(slot.last_seen, s.start_ts);
+    (runsTouched[name] ??= new Set()).add(s.trace_id);
+  }
+  for (const [name, traceSet] of Object.entries(runsTouched)) {
+    if (out[name]) out[name].runs = traceSet.size;
+  }
+  for (const slot of Object.values(out)) {
+    slot.pass_rate = slot.total > 0 ? slot.correct / slot.total : 0;
+  }
+  return Object.values(out).sort((a, b) => {
+    // Used judges first (most rows), then unused alphabetical.
+    if ((a.rows_scored > 0) !== (b.rows_scored > 0)) return a.rows_scored > 0 ? -1 : 1;
+    if (a.rows_scored !== b.rows_scored) return b.rows_scored - a.rows_scored;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+export function judgeScoredRows(name: string, opts?: { limit?: number }): JudgeScoredRow[] {
+  const limit = opts?.limit ?? 200;
+  const rows: JudgeScoredRow[] = [];
+  for (const s of loadSpans()) {
+    if (s.name !== "judge") continue;
+    const a = s.attrs ?? {};
+    if (String(a.judge ?? "") !== name) continue;
+    rows.push({
+      span_id: s.id,
+      trace_id: s.trace_id,
+      qid: String(a.qid ?? ""),
+      judge: name,
+      correct: Number(a.correct ?? 0),
+      total: Number(a.total ?? 0),
+      score: Number(a.score ?? 0),
+      detail: (a.detail as Record<string, any>) ?? {},
+      ts: s.start_ts,
+    });
+  }
+  rows.sort((a, b) => b.ts - a.ts);
+  return rows.slice(0, limit);
+}
+
+export function judgeByName(name: string): JudgeRollup | null {
+  return judgeRollups().find((j) => j.name === name) ?? null;
 }
 
 export type EvalQuestion = {

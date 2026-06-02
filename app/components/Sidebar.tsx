@@ -4,11 +4,59 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
-  { href: "/playground", label: "Playground" },
-  { href: "/pages", label: "Knowledge", group: ["/pages", "/sources"] },
-  { href: "/evals", label: "Evaluations" },
-  { href: "/traces", label: "Activity" },
+  { href: "/requests", label: "Requests", section: "obs" },
+  { href: "/sessions", label: "Sessions", section: "obs" },
+  { href: "/users", label: "Users", section: "obs" },
+  { href: "/properties", label: "Properties", section: "obs" },
+  { href: "/evaluators", label: "Evaluators", section: "obs" },
+  { href: "/playground", label: "Playground", section: "wiki" },
+  { href: "/pages", label: "Knowledge", group: ["/pages", "/sources"], section: "wiki" },
+  { href: "/evals", label: "Evaluations", section: "wiki" },
+  { href: "/traces", label: "Activity", section: "wiki" },
 ];
+
+function NavLink({
+  item,
+  pathname,
+}: {
+  item: { href: string; label: string; group?: string[] };
+  pathname: string;
+}) {
+  const active = item.group
+    ? item.group.some((g) => pathname.startsWith(g))
+    : item.href === "/"
+      ? pathname === "/"
+      : pathname.startsWith(item.href);
+  return (
+    <Link
+      href={item.href}
+      className={`group flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13.5px]
+                 transition-all duration-200 ease-out-quart ${
+                   active ? "" : "nav-link-inactive"
+                 }`}
+      style={
+        active
+          ? {
+              background: "oklch(0.97 0.024 60 / 0.7)",
+              color: "oklch(0.42 0.16 35)",
+              fontWeight: 600,
+              boxShadow:
+                "inset 0 1px 0 oklch(1 0 0 / 0.6), inset 0 0 0 1px oklch(0.91 0.05 50 / 0.5)",
+            }
+          : undefined
+      }
+    >
+      <span
+        className="w-1 h-1 rounded-full transition-all"
+        style={{
+          background: active ? "oklch(0.62 0.18 35)" : "oklch(0.78 0.008 40)",
+          transform: active ? "scale(1.4)" : "scale(1)",
+        }}
+      />
+      <span>{item.label}</span>
+    </Link>
+  );
+}
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -66,41 +114,18 @@ export default function Sidebar() {
 
         {/* Nav */}
         <nav className="flex-1 px-2 pt-3 overflow-y-auto">
-          {NAV.map((item) => {
-            const active = (item as any).group
-              ? (item as any).group.some((g: string) => pathname.startsWith(g))
-              : item.href === "/"
-              ? pathname === "/"
-              : pathname.startsWith(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className="group flex items-center gap-2 px-3 py-1.5 rounded-lg text-[13.5px]
-                           transition-all duration-200 ease-out-quart"
-                style={
-                  active
-                    ? {
-                        background: 'oklch(0.97 0.024 60 / 0.7)',
-                        color: 'oklch(0.42 0.16 35)',
-                        fontWeight: 600,
-                        boxShadow:
-                          'inset 0 1px 0 oklch(1 0 0 / 0.6), inset 0 0 0 1px oklch(0.91 0.05 50 / 0.5)',
-                      }
-                    : { color: 'oklch(0.40 0.012 40)' }
-                }
-              >
-                <span
-                  className="w-1 h-1 rounded-full transition-all"
-                  style={{
-                    background: active ? 'oklch(0.62 0.18 35)' : 'oklch(0.78 0.008 40)',
-                    transform: active ? 'scale(1.4)' : 'scale(1)',
-                  }}
-                />
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
+          <div className="px-3 pb-1.5 text-[10px] uppercase tracking-[0.08em] text-ink-500/80">
+            Observability
+          </div>
+          {NAV.filter((n) => n.section === "obs").map((item) => (
+            <NavLink key={item.href} item={item} pathname={pathname} />
+          ))}
+          <div className="px-3 pt-3 pb-1.5 text-[10px] uppercase tracking-[0.08em] text-ink-500/80">
+            Knowledge
+          </div>
+          {NAV.filter((n) => n.section === "wiki").map((item) => (
+            <NavLink key={item.href} item={item} pathname={pathname} />
+          ))}
         </nav>
 
         {/* Footer: Docs + ⌘K */}
