@@ -122,6 +122,47 @@ def _ambient_session() -> dict:
     return dict(_session_attrs.get() or {})
 
 
+# ─── Lifecycle hooks ────────────────────────────────────────────────────
+# Downstream exporters (OTel, custom sinks) subscribe here without
+# touching the core. Hooks run synchronously in span order; exceptions
+# are swallowed and logged so a broken exporter never crashes user code.
+
+_start_hooks: list = []
+_end_hooks: list = []
+_event_hooks: list = []
+
+
+def register_span_start_hook(fn) -> None:
+    """fn(span_record: dict) called when a span begins."""
+    _start_hooks.append(fn)
+
+
+def register_span_end_hook(fn) -> None:
+    """fn(span_record: dict) called when a span closes (after end_ts is set)."""
+    _end_hooks.append(fn)
+
+
+def register_span_event_hook(fn) -> None:
+    """fn(span_record: dict, event: dict) called for each appended event."""
+    _event_hooks.append(fn)
+
+
+def clear_hooks() -> None:
+    _start_hooks.clear()
+    _end_hooks.clear()
+    _event_hooks.clear()
+
+
+def _fire(hooks: list, *args) -> None:
+    for h in hooks:
+        try:
+            h(*args)
+        except Exception as e:
+            # Best-effort: log to stderr but never propagate.
+            import sys
+            print(f"[wikitrace] hook {h!r} raised: {e}", file=sys.stderr)
+
+
 def init(pipeline: str, trace_dir: str | os.PathLike = ".wikitrace",
          attrs: dict[str, Any] | None = None) -> str:
     """Begin a trace. Returns trace_id."""
@@ -174,6 +215,7 @@ def _build_span_record(name: str, attrs: dict[str, Any]) -> dict:
 def span(name: str, **attrs: Any) -> Iterator[dict]:
     rec = _build_span_record(name, attrs)
     _push(rec)
+    _fire(_start_hooks, rec)
     try:
         yield rec
     except Exception as e:
@@ -184,6 +226,7 @@ def span(name: str, **attrs: Any) -> Iterator[dict]:
         rec["end_ts"] = _now()
         _pop_specific(rec)
         _write(_state["spans_path"], rec)
+        _fire(_end_hooks, rec)
 
 
 def cite(source: str, range: tuple[int, int] | None = None,
@@ -192,14 +235,16 @@ def cite(source: str, range: tuple[int, int] | None = None,
     cur = _span_stack.get()
     if not cur:
         raise RuntimeError("cite() called outside a span")
-    cur[-1]["events"].append({
+    ev = {
         "type": "citation",
         "ts": _now(),
         "source": source,
         "range": list(range) if range else None,
         "claim": claim,
         **extra,
-    })
+    }
+    cur[-1]["events"].append(ev)
+    _fire(_event_hooks, cur[-1], ev)
 
 
 # ─── Multi-step planners ────────────────────────────────────────────────
@@ -231,6 +276,7 @@ def span_open(name: str, **attrs: Any) -> dict:
     rec = _build_span_record(name, attrs)
     _push(rec)
     _live_write({"kind": "span_start", **rec})
+    _fire(_start_hooks, rec)
     return rec
 
 
@@ -247,6 +293,7 @@ def span_event(handle: dict, event_type: str, **fields: Any) -> None:
         "span_id": handle["id"],
         "event": ev,
     })
+    _fire(_event_hooks, handle, ev)
 
 
 def span_close(handle: dict, status: str = "ok", **attrs: Any) -> None:
@@ -263,6 +310,7 @@ def span_close(handle: dict, status: str = "ok", **attrs: Any) -> None:
                  "span_id": handle["id"], "end_ts": handle["end_ts"],
                  "status": status})
     _write(_state["spans_path"], handle)
+    _fire(_end_hooks, handle)
 
 
 def end(status: str = "ok", attrs: dict[str, Any] | None = None) -> None:
