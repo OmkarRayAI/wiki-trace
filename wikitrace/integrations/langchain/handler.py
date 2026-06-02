@@ -135,6 +135,15 @@ class WikitraceCallbackHandler(BaseCallbackHandler):
         self._span_attrs: dict[str, Any] = {}
         self._trace_active: bool = False
 
+        # Live span handles keyed by LangChain run_id, for nested
+        # planner steps (tool calls, agent actions) and streaming LLMs.
+        self._tool_handles: dict[UUID, dict[str, Any]] = {}
+        self._llm_handles: dict[UUID, dict[str, Any]] = {}
+        # Outer agent_call span — opened on first chain start, closed
+        # on outer chain end. We open it eagerly so nested step/tool
+        # spans can parent to it during the run.
+        self._root_handle: dict[str, Any] | None = None
+
     # ─── Public knobs ────────────────────────────────────────────────────
     def set_qid(self, qid: str) -> None:
         self.qid = qid
@@ -186,6 +195,17 @@ class WikitraceCallbackHandler(BaseCallbackHandler):
         self._correct = None
         self._total = None
         self._span_attrs.clear()
+        self._tool_handles.clear()
+        self._llm_handles.clear()
+        # Open the agent_call eagerly so nested tool / step / llm
+        # spans can parent to it during the run. We finalize attrs at
+        # on_chain_end.
+        self._root_handle = sdk.span_open(
+            "agent_call",
+            agent=self.agent_name,
+            qid=self.qid,
+            chunk_refs=[],
+        )
 
     def on_retriever_end(
         self,
@@ -290,9 +310,18 @@ class WikitraceCallbackHandler(BaseCallbackHandler):
             )
         attrs.update(self._span_attrs)
 
-        with sdk.span("agent_call", **attrs):
+        # Attach citations to the eagerly-opened root span before close.
+        if self._root_handle is not None:
             for ref in self._chunk_refs:
-                sdk.cite(source=ref, claim=f"retrieved by {self.agent_name}")
+                self._root_handle["events"].append({
+                    "type": "citation",
+                    "ts": time.time(),
+                    "source": ref,
+                    "range": None,
+                    "claim": f"retrieved by {self.agent_name}",
+                })
+            sdk.span_close(self._root_handle, **attrs)
+            self._root_handle = None
 
     def on_chain_error(
         self,
@@ -306,15 +335,138 @@ class WikitraceCallbackHandler(BaseCallbackHandler):
             return
         if not self._trace_active:
             return
+        if self._root_handle is not None:
+            sdk.span_close(
+                self._root_handle,
+                status="error",
+                error=f"{type(error).__name__}: {error}",
+                chunk_refs=list(self._chunk_refs),
+            )
+            self._root_handle = None
+
+    # ─── Multi-step planner: tool calls + agent actions ──────────────────
+    def on_tool_start(
+        self,
+        serialized: dict[str, Any] | None,
+        input_str: str,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        if not self._trace_active:
+            return
+        tool_name = (serialized or {}).get("name") or "tool"
+        self._tool_handles[run_id] = sdk.span_open(
+            "tool_call",
+            tool=tool_name,
+            input_chars=len(input_str or ""),
+        )
+
+    def on_tool_end(
+        self,
+        output: str,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        h = self._tool_handles.pop(run_id, None)
+        if h is not None:
+            sdk.span_close(h, output_chars=len(str(output or "")))
+
+    def on_tool_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        h = self._tool_handles.pop(run_id, None)
+        if h is not None:
+            sdk.span_close(
+                h, status="error",
+                error=f"{type(error).__name__}: {error}",
+            )
+
+    def on_agent_action(
+        self,
+        action: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        # AgentAction is a planner decision: the model picked a tool +
+        # input. We record it as a leaf span at the current parent so
+        # the planner trail is visible even when no tool fires.
+        if not self._trace_active:
+            return
         with sdk.span(
-            "agent_call",
-            agent=self.agent_name,
-            qid=self.qid,
-            chunk_refs=list(self._chunk_refs),
-            error=f"{type(error).__name__}: {error}",
-            status="error",
-        ) as s:
-            s["status"] = "error"
+            "agent_action",
+            tool=getattr(action, "tool", None),
+            tool_input=str(getattr(action, "tool_input", ""))[:500],
+            log=str(getattr(action, "log", ""))[:500],
+        ):
+            pass
+
+    # ─── Streaming LLM calls ─────────────────────────────────────────────
+    # We open an llm_call span at on_llm_start (in addition to the
+    # prompt_chars accounting above) so streamed tokens can attach to
+    # it via on_llm_new_token. The original on_llm_start hook above
+    # only updated counters; we extend it here without overriding it.
+    def on_llm_new_token(
+        self,
+        token: str,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        h = self._llm_handles.get(run_id)
+        if h is None:
+            # First token — open a streaming llm_call span lazily so we
+            # don't double up with non-streaming callers.
+            h = sdk.span_open("llm_call", model=self._model or "unknown")
+            self._llm_handles[run_id] = h
+        sdk.span_event(h, "token", text=token)
+
+    def on_llm_end(
+        self,
+        response: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        h = self._llm_handles.pop(run_id, None)
+        if h is not None:
+            # answer_chars from the LLMResult, best-effort.
+            text = ""
+            try:
+                gens = getattr(response, "generations", []) or []
+                for g in gens:
+                    for item in g or []:
+                        text += getattr(item, "text", "") or ""
+            except Exception:
+                pass
+            sdk.span_close(h, answer_chars=len(text))
+
+    def on_llm_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: UUID | None = None,
+        **kwargs: Any,
+    ) -> None:
+        h = self._llm_handles.pop(run_id, None)
+        if h is not None:
+            sdk.span_close(
+                h, status="error",
+                error=f"{type(error).__name__}: {error}",
+            )
 
 
 @contextmanager
