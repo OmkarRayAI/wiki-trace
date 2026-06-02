@@ -45,14 +45,21 @@ npm run dev
 
 That's it. Drop a PDF in the Playground; ask a question; see citations.
 
-If you're already running a RAG pipeline (LangChain, custom, anything),
-**you don't need the dashboard to start.** Just install the SDK:
+If you're already running a RAG pipeline or LLM app (LangChain, OpenAI
+SDK, Anthropic SDK, custom, anything), **you don't need the dashboard
+to start.** Just install the SDK:
 
 ```bash
-pip install 'wikitrace[langchain]'   # or just `wikitrace` for the manual SDK
+pip install wikitrace                  # core SDK + decorators
+pip install 'wikitrace[langchain]'     # + LangChain handler
+pip install 'wikitrace[crewai]'        # + CrewAI listener
+pip install 'wikitrace[adk]'           # + Google ADK callbacks
+pip install 'wikitrace[agno]'          # + Agno streaming wrapper
 ```
 
-…and skip to [Bring your own RAG](#bring-your-own-rag) below.
+Then either skip to [For developers](#for-developers) for the
+decorator API + auto-patching of OpenAI / Anthropic, or
+[Bring your own RAG](#bring-your-own-rag) for framework adapters.
 
 ---
 
@@ -71,6 +78,90 @@ Both APIs have free tiers that work for the demo.
 
 If you skip Pulse, the chat still works — Upload PDF will just return a
 "set PULSE_API_KEY" message.
+
+---
+
+## For developers
+
+Building an LLM app, agent, or eval harness directly in Python — no
+framework, or your framework isn't on the supported list? Three primitives
+cover most of what you need:
+
+### 1. Decorators
+
+```python
+import wikitrace
+
+@wikitrace.trace
+def retrieve(query: str, k: int = 5) -> list[str]:
+    return vector_db.search(query, k)
+
+@wikitrace.tool(name="search")
+def search(query: str) -> str:
+    ...
+
+@wikitrace.trace                  # async works the same way
+async def answer(q: str) -> str:
+    ...
+```
+
+`@trace` records args, return value, and exceptions on a span. `@tool`
+emits a `tool_call` span tagged with the tool name. Both work on sync
+*and* async functions — auto-detected. Outside `wikitrace.init()` they
+are no-ops, so you can sprinkle decorators in library code without
+forcing every caller to set up tracing.
+
+### 2. Auto-patch OpenAI / Anthropic
+
+```python
+import openai, wikitrace
+import wikitrace.openai
+
+wikitrace.openai.patch()        # one line, every call traced
+
+wikitrace.init(pipeline="my-app")
+client = openai.OpenAI()
+resp = client.chat.completions.create(model="gpt-4o", messages=[...])
+wikitrace.end()
+```
+
+Captures `model`, `prompt_chars`, `answer_chars`, `input_tokens`,
+`output_tokens`, `cost_usd` (from a built-in price table), and
+`latency_ms`. Streaming calls become a streaming `llm_call` span with
+per-token events. Sync, async, streaming, async-streaming all
+supported. Anthropic mirrors the same surface:
+
+```python
+import wikitrace.anthropic
+wikitrace.anthropic.patch()
+```
+
+Add prices for new or self-hosted models via:
+
+```python
+from wikitrace.pricing import set_price
+set_price("my-internal-llama", input_per_1m_usd=0.0, output_per_1m_usd=0.0)
+```
+
+### 3. Sessions, users, tags
+
+Group traces by conversation, user, or environment without threading
+those fields through every call:
+
+```python
+with wikitrace.session(id=request.id, user=user.id, tags=["prod", "v3"]):
+    answer = chain.invoke({"query": q})
+```
+
+Every span created inside the block is stamped with `session_id`,
+`user_id`, and `tags`. Nested sessions merge. Use `set_session()` /
+`clear_session()` for the imperative variant when a context manager
+is awkward (e.g. FastAPI middleware).
+
+### Async safety
+
+The SDK uses `contextvars`, so concurrent `asyncio.gather` tasks each
+keep their own span stack. No cross-task `parent_id` contamination.
 
 ---
 
@@ -138,8 +229,105 @@ Complete runnable example: [`examples/byo_rag.py`](examples/byo_rag.py).
 After running either, open `/traces` to see the run and `/evals` to see
 the chunk-contribution table populate.
 
+### CrewAI — event-bus listener (alpha)
+
+```bash
+pip install 'wikitrace[crewai]'
+```
+
+```python
+from crewai import Crew
+from wikitrace.crewai import WikitraceCrewListener
+
+listener = WikitraceCrewListener(qid="q1")   # registers itself
+result = crew.kickoff(inputs={...})
+listener.flush()
+```
+
+Emits one `agent_call` per kickoff, with nested `crew_agent` /
+`tool_call` / `llm_call` spans for every agent execution, tool use,
+and LLM call. Multi-agent crews show up as a multi-step planner
+trace.
+
+### Google ADK — callback kwargs (alpha)
+
+```bash
+pip install 'wikitrace[adk]'
+```
+
+```python
+from google.adk.agents import LlmAgent
+from wikitrace.adk import make_callbacks
+
+cb = make_callbacks(agent_name="my-adk", qid="q1")
+flush = cb.pop("flush")
+
+agent = LlmAgent(model="gemini-2.0-flash", name="x", tools=[...], **cb)
+# ... run agent ...
+flush()
+```
+
+Wires all six ADK callbacks (`before/after_agent`, `before/after_model`,
+`before/after_tool`) into wikitrace spans. Planner loops with multiple
+model calls and tool steps render as a tree under one `agent_call`.
+
+### Agno — streaming wrapper (alpha)
+
+```bash
+pip install 'wikitrace[agno]'
+```
+
+```python
+from agno.agent import Agent
+from wikitrace.agno import trace_agno_run
+
+agent = Agent(model=..., tools=[...])
+answer = trace_agno_run(agent, "your question", qid="q1")
+```
+
+Consumes Agno's event stream (`stream=True, stream_events=True`),
+opening one streaming `llm_call` span with token events and nested
+`tool_call` spans for each tool execution.
+
+> **Alpha disclaimer** for CrewAI / ADK / Agno: the LangChain handler
+> is the only adapter exercised against real chains in CI today. The
+> three above were built against documented public APIs and verified
+> with mocked event streams. Pin the framework version you're using
+> and file an issue if your release renamed an event or callback.
+
 > **LlamaIndex, OpenAI Assistants, Haystack** — handlers planned. File
 > an issue with your stack and we'll prioritize.
+
+---
+
+## How it compares
+
+wiki-trace is **the local-first tracer for solo devs and small teams
+who don't want a SaaS dashboard.** Honest comparison vs. the hosted
+options:
+
+| | wiki-trace | Helicone | Phoenix (Arize) | W&B Weave |
+|---|:---:|:---:|:---:|:---:|
+| Local-only, no SaaS required | ✅ | partial | ✅ (OSS) | ❌ |
+| One-line OpenAI / Anthropic auto-patch | ✅ | ✅ | ✅ | ✅ |
+| Streaming + token events | ✅ | ✅ | ✅ | ✅ |
+| Multi-step planner traces | ✅ | partial | ✅ | ✅ |
+| Cost tracking with built-in price table | ✅ | ✅ | ✅ | ✅ |
+| Sessions / users / tags | ✅ | ✅ | ✅ | ✅ |
+| Async / contextvars safe | ✅ | ✅ | ✅ | ✅ |
+| LangChain / CrewAI / ADK / Agno adapters | ✅ | LangChain only | ✅ | partial |
+| OpenTelemetry export | ❌ | ❌ | ✅ | ❌ |
+| Hosted multi-tenant ingestion | ❌ | ✅ | ✅ (paid) | ✅ |
+| Built-in evaluator library | partial | partial | ✅ | ✅ |
+| Datasets / experiments / sweeps | ❌ | ❌ | ✅ | ✅ |
+| RBAC, alerts, SOC 2 | ❌ | ✅ | ✅ (paid) | ✅ |
+| Node / Go / Rust SDKs | ❌ | ✅ | partial | partial |
+| Free for production traffic at scale | ✅ | depends | ✅ | depends |
+
+**Pick wiki-trace if** you're a solo dev or small team, your data must
+stay on your machine, and you want a tracer you can `cat | jq` and
+debug at 2am. **Pick the others if** you need a hosted dashboard for a
+team, formal evaluator pipelines, or compliance certifications.
 
 ---
 
@@ -153,9 +341,9 @@ the chunk-contribution table populate.
   curated page or the chunk you retrieve.
 - **Not a model gateway.** We use OpenRouter as the default. Customers
   can pin any OpenAI-compatible endpoint by setting `WIKITRACE_MODEL`.
-- **Not a tracing framework competing with Langfuse.** OpenTelemetry
-  exists if you want raw spans. We translate spans into PM-readable
-  activity.
+- **Not a hosted observability platform.** No multi-tenant ingestion,
+  no RBAC, no alerting. If you need those, run alongside Phoenix /
+  Helicone / Weave — the SDK can coexist.
 
 ---
 
@@ -220,6 +408,11 @@ This is v0.1. The honest version of what works:
 chain invocation becomes a wiki-trace span. See
 [`examples/langchain_rag.py`](examples/langchain_rag.py).
 
+**CrewAI / Google ADK / Agno** users — alpha adapters. See the
+"Bring your own RAG" section above for usage. Verified end-to-end
+against mocked event streams; not yet exercised against real
+production runs in CI.
+
 ### Works with ~30 minutes of integration
 Other frameworks — wrap your agent with `wikitrace.span()` calls. See
 [`examples/byo_rag.py`](examples/byo_rag.py). Works as long as your
@@ -239,7 +432,7 @@ stack meets these four conditions:
 - **Non-text retrieval** — image regions, AST nodes, multi-modal. Chunk refs are string-keyed but the dashboard only knows how to render text.
 - **Closed retrieval** — managed services that abstract away the chunks (Bedrock Knowledge Bases, Cohere RAG end-to-end). Without chunk IDs there's nothing to attribute to.
 - **Languages other than Python** — Node/Go/Rust teams currently have to write the JSONL format directly. SDK ports planned.
-- **Frameworks beyond LangChain** — LlamaIndex, OpenAI Assistants, Haystack, CrewAI handlers planned. The manual `wikitrace.span()` path works in the meantime.
+- **Frameworks beyond LangChain / CrewAI / ADK / Agno** — LlamaIndex, OpenAI Assistants, Haystack handlers planned. The manual `wikitrace.span()` path works in the meantime.
 - **Compliance-heavy environments** — no encryption-at-rest, no audit signing, no SOC 2. Healthcare/finance/defense should wait.
 
 If you hit something broken, open an issue.

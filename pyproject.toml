@@ -33,8 +33,20 @@ dependencies = []
 langchain = [
     "langchain-core>=0.3.0",
 ]
+crewai = [
+    "crewai>=0.70.0",
+]
+adk = [
+    "google-adk>=0.1.0",
+]
+agno = [
+    "agno>=0.1.0",
+]
 all = [
     "langchain-core>=0.3.0",
+    "crewai>=0.70.0",
+    "google-adk>=0.1.0",
+    "agno>=0.1.0",
 ]
 
 [project.urls]
@@ -51,7 +63,17 @@ packages = [
     "wikitrace",
     "wikitrace.integrations",
     "wikitrace.integrations.langchain",
+    "wikitrace.integrations.crewai",
+    "wikitrace.integrations.adk",
+    "wikitrace.integrations.agno",
+    "wikitrace.integrations.openai",
+    "wikitrace.integrations.anthropic",
     "wikitrace.langchain",
+    "wikitrace.crewai",
+    "wikitrace.adk",
+    "wikitrace.agno",
+    "wikitrace.openai",
+    "wikitrace.anthropic",
 ]
 
 [tool.setuptools.package-data]
