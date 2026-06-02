@@ -195,7 +195,38 @@ own is just a function `(output, ctx) -> JudgeResult`. Eval runs emit
 the same span shape as the existing eval ingestion path, so they show
 up in the dashboard's `/evals` route automatically.
 
-### 5. OpenTelemetry export
+### 5. HTTP ingest server (use from any language)
+
+If you're not on Python — Node, Go, Rust, Ruby, anything that can
+POST JSON — run wiki-trace as a local ingest server and emit spans
+over HTTP:
+
+```bash
+python -m wikitrace.ingest_serve --port 8765 --api-key your-secret
+```
+
+Then from any language:
+
+```bash
+curl -X POST http://127.0.0.1:8765/v1/init \
+     -H 'X-API-Key: your-secret' \
+     -d '{"pipeline":"my-node-app"}'
+# → {"trace_id": "abc123..."}
+
+curl -X POST http://127.0.0.1:8765/v1/spans \
+     -H 'X-API-Key: your-secret' \
+     -d '{"id":"...","trace_id":"abc123...","name":"agent_call",
+          "start_ts":1700000000,"end_ts":1700000001,
+          "attrs":{"agent":"my-rag","model":"gpt-4o","correct":1,"total":1}}'
+```
+
+Endpoints: `POST /v1/init`, `POST /v1/spans` (single or batch via
+`{"spans": [...]}`), `POST /v1/spans/event` (streaming token deltas),
+`POST /v1/end`, `GET /v1/health`. Stdlib only — no extra installs.
+The records land in the same `spans.jsonl` your Python SDK writes,
+so the dashboard renders them identically.
+
+### 6. OpenTelemetry export
 
 Pipe wiki-trace into Phoenix, Datadog, Honeycomb, Grafana, or any
 OTLP collector:
@@ -372,7 +403,7 @@ options:
 | Built-in evaluator library | ✅ (5 judges + LLM-as-judge) | partial | ✅ (~30 evaluators) | ✅ |
 | Datasets / experiment runs | ✅ Dataset + EvalResults | ❌ | ✅ + sweeps | ✅ + sweeps |
 | RBAC, alerts, SOC 2 | ❌ | ✅ | ✅ (paid) | ✅ |
-| Node / Go / Rust SDKs | ❌ | ✅ | partial | partial |
+| Node / Go / Rust SDKs | HTTP ingest (any lang) | ✅ native | partial | partial |
 | Free for production traffic at scale | ✅ | depends | ✅ | depends |
 
 **Pick wiki-trace if** you're a solo dev or small team, your data must
