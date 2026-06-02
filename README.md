@@ -481,12 +481,70 @@ billing limits — those still matter.
 
 ---
 
+## Self-hosted cloud
+
+Run wiki-trace as a multi-tenant ingest service for your organization.
+Same span contract as the local SDK, but writes to a relational store
+with API-key auth and per-tenant isolation.
+
+```bash
+pip install 'wikitrace[cloud]'
+
+WIKITRACE_CLOUD_ADMIN_KEY=$(openssl rand -hex 32) \
+  python -m wikitrace.cloud.serve --port 8001 --db /var/lib/wikitrace.db
+```
+
+Create a tenant and get an API key:
+
+```bash
+python -m wikitrace.cloud.admin \
+    --remote http://localhost:8001 \
+    --admin-key "$WIKITRACE_CLOUD_ADMIN_KEY" \
+    create-tenant --name "Acme Inc"
+# {"tenant_id": "...", "api_key": "wt_live_...", ...}
+#
+#   >>> Save this key now. It is shown ONCE. <<<
+```
+
+Then point any wiki-trace client at it:
+
+```python
+import wikitrace
+wikitrace.init(pipeline="my-app",
+               trace_dir="...",            # local SDK still writes locally
+               # or use the JS SDK / HTTP ingest with endpoint=http://...:8001
+               )
+```
+
+What you get:
+
+- **Per-tenant isolation** — every read and write is scoped by the
+  API key's tenant_id. Two tenants writing to the same `trace_id`
+  see only their own spans. No cross-tenant query path.
+- **API-key lifecycle** — keys are sha256-hashed at rest and revocable
+  immediately. Plaintext is shown exactly once at issuance.
+- **Helicone-compatible passthrough** — `POST /oai/v1/log` with
+  `Helicone-Auth: Bearer wt_live_...` works, so any client already
+  pointed at Helicone can ingest into the cloud server unchanged.
+- **Admin CLI** — `python -m wikitrace.cloud.admin {create-tenant,
+  list-tenants, list-keys, issue-key, revoke-key, stats}`. Local
+  mode hits the DB directly; `--remote` talks to a running server
+  with `X-Admin-Key`.
+
+The default storage is `aiosqlite` (file-backed, zero-dep). For
+production at scale, the schema is Postgres-portable — swap the
+`aiosqlite` driver in `wikitrace/cloud/db.py` for `asyncpg` and the
+SQL works as-is.
+
+---
+
 ## Pricing
 
 | | |
 |---|---|
 | **Self-hosted** | Free, forever. Apache 2.0 / MIT. Your data stays on your infrastructure. |
-| **Cloud** | Not yet. Self-host today. |
+| **Self-hosted cloud** | Free. Run `wikitrace.cloud.serve` on your own box; you get multi-tenant isolation, API keys, the admin CLI. |
+| **Hosted SaaS** | Coming. Self-host today. |
 | **Enterprise** | Talk to us if you need SSO, RBAC, or a support contract. |
 
 There is no usage-based metering, no seat tax, and no telemetry
