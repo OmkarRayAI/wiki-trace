@@ -1,0 +1,54 @@
+{
+  "name": "wikitrace",
+  "version": "0.2.0",
+  "description": "Local-first LLM tracing for JS/TS. Mirrors the Python wikitrace SDK and emits spans to a wikitrace ingest server.",
+  "license": "MIT",
+  "author": "Omkar Ray",
+  "homepage": "https://github.com/OmkarRayAI/wiki-trace",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OmkarRayAI/wiki-trace.git",
+    "directory": "sdk-js"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.cjs"
+    },
+    "./openai": {
+      "types": "./dist/openai.d.ts",
+      "import": "./dist/openai.mjs",
+      "require": "./dist/openai.cjs"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "llm",
+    "rag",
+    "tracing",
+    "observability",
+    "evaluation",
+    "openai",
+    "anthropic"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.cjs.json",
+    "test": "node --test --import tsx test/*.test.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.0.0"
+  }
+}
