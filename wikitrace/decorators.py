@@ -167,6 +167,60 @@ def tool(
     return _decorate(fn)
 
 
+def eval(
+    *,
+    dataset: Any,
+    judges: list,
+    name: str | None = None,
+    model: str = "unknown",
+    pipeline: str = "eval",
+    trace_dir: str = ".wikitrace",
+):
+    """Decorator: attach an eval suite to a function.
+
+    The wrapped function still runs normally on direct calls. It also
+    grows an ``.eval()`` method that runs the suite::
+
+        @wikitrace.eval(dataset=ds, judges=[judges.contains_all])
+        def my_agent(input: str) -> str:
+            return llm(input)
+
+        # Normal call — unchanged behavior.
+        my_agent("hi")
+
+        # Run the eval suite.
+        results = my_agent.eval()
+        print(results.summary)
+
+    Imports :mod:`wikitrace.evals.run_eval` lazily so the decorator is
+    cheap to import in code paths that never run an eval.
+    """
+    def _decorate(fn: Callable[..., Any]) -> Callable[..., Any]:
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            return fn(*args, **kwargs)
+
+        def run():
+            from .evals import run_eval
+            return run_eval(
+                fn,
+                dataset=dataset,
+                judges=judges,
+                name=name or fn.__name__,
+                pipeline=pipeline,
+                trace_dir=trace_dir,
+                agent_name=name or fn.__name__,
+                model=model,
+            )
+
+        wrapper.eval = run  # type: ignore[attr-defined]
+        wrapper.dataset = dataset  # type: ignore[attr-defined]
+        wrapper.judges = judges  # type: ignore[attr-defined]
+        return wrapper
+
+    return _decorate
+
+
 def _safe_wrap(fn, span_name, extra_attrs, capture_args, capture_return):
     """Wrap fn so it's a no-op when no trace is active (unless strict
     mode is on). Lets devs decorate functions in library code without

@@ -19,15 +19,19 @@ from .sdk import (
     init, span, step, cite, end, current_trace_id,
     span_open, span_event, span_close,
     session, set_session, clear_session,
+    register_span_start_hook, register_span_end_hook,
+    register_span_event_hook, clear_hooks,
 )
-from .decorators import trace, tool
+from .decorators import trace, tool, eval  # noqa: A004 — shadowing builtin intentional
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "init", "span", "step", "cite", "end", "current_trace_id",
     "span_open", "span_event", "span_close",
     "session", "set_session", "clear_session",
-    "trace", "tool",
+    "register_span_start_hook", "register_span_end_hook",
+    "register_span_event_hook", "clear_hooks",
+    "trace", "tool", "eval",
     "__version__",
 ]
