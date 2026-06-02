@@ -187,10 +187,10 @@ def current_trace_id() -> str | None:
 
 
 def _write(path: Path, obj: dict) -> None:
-    line = json.dumps(obj, default=str) + "\n"
-    with _write_lock:
-        with path.open("a") as f:
-            f.write(line)
+    """Hand off to the async batched writer. Returns immediately —
+    the actual disk write happens on a background thread."""
+    from ._writer import get_writer
+    get_writer().enqueue(path, obj)
 
 
 def _build_span_record(name: str, attrs: dict[str, Any]) -> dict:
@@ -313,8 +313,15 @@ def span_close(handle: dict, status: str = "ok", **attrs: Any) -> None:
     _fire(_end_hooks, handle)
 
 
-def end(status: str = "ok", attrs: dict[str, Any] | None = None) -> None:
-    """Close the current trace, write trace summary record."""
+def end(status: str = "ok", attrs: dict[str, Any] | None = None,
+        flush_timeout: float | None = 5.0) -> None:
+    """Close the current trace and flush pending spans.
+
+    Blocks for up to ``flush_timeout`` seconds waiting for the async
+    writer to drain. Pass ``flush_timeout=None`` to skip the wait
+    (fire-and-forget exit, e.g. in CLI scripts that don't care about
+    the last few spans). Pass 0 for a non-blocking attempt.
+    """
     if _state.get("trace_id") is None:
         return
     rec = {
@@ -328,6 +335,9 @@ def end(status: str = "ok", attrs: dict[str, Any] | None = None) -> None:
     _write(_state["traces_path"], rec)
     _state["trace_id"] = None
     _span_stack.set(())
+    if flush_timeout is not None:
+        from ._writer import get_writer
+        get_writer().flush(timeout=flush_timeout)
 
 
 # ─── Sessions / users / tags ────────────────────────────────────────────

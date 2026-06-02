@@ -25,6 +25,7 @@ from typing import Any
 
 from ... import sdk
 from ...pricing import compute_cost
+from ..._retry import retry_with_backoff, retry_with_backoff_async
 
 _patched: bool = False
 _originals: dict[str, Any] = {}
@@ -81,7 +82,8 @@ def _prompt_chars(messages: list | None, system: Any = None) -> int:
 
 
 def _finalize(handle: dict, model: str, started_at: float,
-              answer_chars: int, usage: Any) -> None:
+              answer_chars: int, usage: Any,
+              retry_count: int = 0) -> None:
     in_t = getattr(usage, "input_tokens", None) if usage else None
     out_t = getattr(usage, "output_tokens", None) if usage else None
     total_t = (
@@ -101,6 +103,7 @@ def _finalize(handle: dict, model: str, started_at: float,
         total_tokens=total_t,
         cost_usd=cost,
         latency_ms=int((time.time() - started_at) * 1000),
+        retry_count=retry_count,
     )
 
 
@@ -136,19 +139,28 @@ def _wrap_sync(orig_create):
         )
         started = time.time()
 
+        retries = {"n": 0}
+        def _on_retry(attempt: int, err: BaseException) -> None:
+            retries["n"] = attempt + 1
+
         try:
-            result = orig_create(self, *args, **kwargs)
+            result = retry_with_backoff(
+                lambda: orig_create(self, *args, **kwargs),
+                on_retry=_on_retry,
+            )
         except BaseException as e:
             sdk.span_close(handle, status="error",
-                           error=f"{type(e).__name__}: {e}")
+                           error=f"{type(e).__name__}: {e}",
+                           retry_count=retries["n"])
             raise
 
         if not is_stream:
             text = _extract_text(result)
             _finalize(handle, model, started, len(text),
-                      getattr(result, "usage", None))
+                      getattr(result, "usage", None),
+                      retry_count=retries["n"])
             return result
-        return _AnthropicStreamWrap(result, handle, model, started)
+        return _AnthropicStreamWrap(result, handle, model, started, retries["n"])
 
     return wrapper
 
@@ -171,29 +183,39 @@ def _wrap_async(orig_create):
         )
         started = time.time()
 
+        retries = {"n": 0}
+        def _on_retry(attempt: int, err: BaseException) -> None:
+            retries["n"] = attempt + 1
+
         try:
-            result = await orig_create(self, *args, **kwargs)
+            result = await retry_with_backoff_async(
+                lambda: orig_create(self, *args, **kwargs),
+                on_retry=_on_retry,
+            )
         except BaseException as e:
             sdk.span_close(handle, status="error",
-                           error=f"{type(e).__name__}: {e}")
+                           error=f"{type(e).__name__}: {e}",
+                           retry_count=retries["n"])
             raise
 
         if not is_stream:
             text = _extract_text(result)
             _finalize(handle, model, started, len(text),
-                      getattr(result, "usage", None))
+                      getattr(result, "usage", None),
+                      retry_count=retries["n"])
             return result
-        return _AnthropicAsyncStreamWrap(result, handle, model, started)
+        return _AnthropicAsyncStreamWrap(result, handle, model, started, retries["n"])
 
     return wrapper
 
 
 class _AnthropicStreamWrap:
-    def __init__(self, inner, handle, model, started):
+    def __init__(self, inner, handle, model, started, retry_count=0):
         self._inner = inner
         self._handle = handle
         self._model = model
         self._started = started
+        self._retry_count = retry_count
         self._answer_chars = 0
         self._usage = None
 
@@ -205,7 +227,8 @@ class _AnthropicStreamWrap:
             event = next(self._inner)
         except StopIteration:
             _finalize(self._handle, self._model, self._started,
-                      self._answer_chars, self._usage)
+                      self._answer_chars, self._usage,
+                      retry_count=self._retry_count)
             raise
         except BaseException as e:
             sdk.span_close(self._handle, status="error",
@@ -242,11 +265,12 @@ class _AnthropicStreamWrap:
 
 
 class _AnthropicAsyncStreamWrap:
-    def __init__(self, inner, handle, model, started):
+    def __init__(self, inner, handle, model, started, retry_count=0):
         self._inner = inner
         self._handle = handle
         self._model = model
         self._started = started
+        self._retry_count = retry_count
         self._answer_chars = 0
         self._usage = None
 
@@ -258,7 +282,8 @@ class _AnthropicAsyncStreamWrap:
             event = await self._inner.__anext__()
         except StopAsyncIteration:
             _finalize(self._handle, self._model, self._started,
-                      self._answer_chars, self._usage)
+                      self._answer_chars, self._usage,
+                      retry_count=self._retry_count)
             raise
         except BaseException as e:
             sdk.span_close(self._handle, status="error",

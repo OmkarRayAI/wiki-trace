@@ -29,6 +29,7 @@ from typing import Any
 
 from ... import sdk
 from ...pricing import compute_cost
+from ..._retry import retry_with_backoff, retry_with_backoff_async
 
 _patched: bool = False
 _originals: dict[str, Any] = {}
@@ -84,7 +85,8 @@ def _prompt_chars(messages: list | None) -> int:
 
 
 def _finalize(handle: dict, model: str, started_at: float,
-              answer_chars: int, usage: Any) -> None:
+              answer_chars: int, usage: Any,
+              retry_count: int = 0) -> None:
     in_t = out_t = total_t = None
     if usage is not None:
         in_t = getattr(usage, "prompt_tokens", None) or _dget(usage, "prompt_tokens")
@@ -103,6 +105,7 @@ def _finalize(handle: dict, model: str, started_at: float,
         total_tokens=total_t,
         cost_usd=cost,
         latency_ms=int((time.time() - started_at) * 1000),
+        retry_count=retry_count,
     )
 
 
@@ -135,11 +138,20 @@ def _wrap_sync(orig_create):
         )
         started = time.time()
 
+        retries = {"n": 0}
+
+        def _on_retry(attempt: int, err: BaseException) -> None:
+            retries["n"] = attempt + 1
+
         try:
-            result = orig_create(self, *args, **kwargs)
+            result = retry_with_backoff(
+                lambda: orig_create(self, *args, **kwargs),
+                on_retry=_on_retry,
+            )
         except BaseException as e:
             sdk.span_close(handle, status="error",
-                           error=f"{type(e).__name__}: {e}")
+                           error=f"{type(e).__name__}: {e}",
+                           retry_count=retries["n"])
             raise
 
         if not is_stream:
@@ -152,12 +164,15 @@ def _wrap_sync(orig_create):
                     content = getattr(msg, "content", None)
                     if isinstance(content, str):
                         answer += content
-            _finalize(handle, model, started, len(answer), usage)
+            _finalize(handle, model, started, len(answer), usage,
+                      retry_count=retries["n"])
             return result
 
         # Streaming: wrap the iterator so we accumulate tokens + close
-        # the span when iteration finishes.
-        return _StreamWrap(result, handle, model, started)
+        # the span when iteration finishes. Retries inside the stream
+        # would replay tokens to the user, so we only retried the
+        # initial create() call.
+        return _StreamWrap(result, handle, model, started, retries["n"])
 
     return wrapper
 
@@ -166,11 +181,12 @@ class _StreamWrap:
     """Iterator wrapper for sync OpenAI streams. Forwards every chunk
     to the caller and emits a span_event per content delta."""
 
-    def __init__(self, inner, handle, model, started):
+    def __init__(self, inner, handle, model, started, retry_count=0):
         self._inner = inner
         self._handle = handle
         self._model = model
         self._started = started
+        self._retry_count = retry_count
         self._answer_chars = 0
         self._usage = None
 
@@ -182,7 +198,8 @@ class _StreamWrap:
             chunk = next(self._inner)
         except StopIteration:
             _finalize(self._handle, self._model, self._started,
-                      self._answer_chars, self._usage)
+                      self._answer_chars, self._usage,
+                      retry_count=self._retry_count)
             raise
         except BaseException as e:
             sdk.span_close(self._handle, status="error",
@@ -233,11 +250,20 @@ def _wrap_async(orig_create):
         )
         started = time.time()
 
+        retries = {"n": 0}
+
+        def _on_retry(attempt: int, err: BaseException) -> None:
+            retries["n"] = attempt + 1
+
         try:
-            result = await orig_create(self, *args, **kwargs)
+            result = await retry_with_backoff_async(
+                lambda: orig_create(self, *args, **kwargs),
+                on_retry=_on_retry,
+            )
         except BaseException as e:
             sdk.span_close(handle, status="error",
-                           error=f"{type(e).__name__}: {e}")
+                           error=f"{type(e).__name__}: {e}",
+                           retry_count=retries["n"])
             raise
 
         if not is_stream:
@@ -249,20 +275,22 @@ def _wrap_async(orig_create):
                     content = getattr(msg, "content", None)
                     if isinstance(content, str):
                         answer += content
-            _finalize(handle, model, started, len(answer), usage)
+            _finalize(handle, model, started, len(answer), usage,
+                      retry_count=retries["n"])
             return result
 
-        return _AsyncStreamWrap(result, handle, model, started)
+        return _AsyncStreamWrap(result, handle, model, started, retries["n"])
 
     return wrapper
 
 
 class _AsyncStreamWrap:
-    def __init__(self, inner, handle, model, started):
+    def __init__(self, inner, handle, model, started, retry_count=0):
         self._inner = inner
         self._handle = handle
         self._model = model
         self._started = started
+        self._retry_count = retry_count
         self._answer_chars = 0
         self._usage = None
 
@@ -275,7 +303,8 @@ class _AsyncStreamWrap:
         except StopAsyncIteration:
             from .patch import _finalize  # avoid circular at import
             _finalize(self._handle, self._model, self._started,
-                      self._answer_chars, self._usage)
+                      self._answer_chars, self._usage,
+                      retry_count=self._retry_count)
             raise
         except BaseException as e:
             sdk.span_close(self._handle, status="error",

@@ -23,6 +23,7 @@ from .sdk import (
     register_span_event_hook, clear_hooks,
 )
 from .decorators import trace, tool, eval  # noqa: A004 — shadowing builtin intentional
+from .budget import budget, BudgetExceeded, current_cost, remaining as budget_remaining, check as budget_check
 
 __version__ = "0.2.0"
 
@@ -33,5 +34,7 @@ __all__ = [
     "register_span_start_hook", "register_span_end_hook",
     "register_span_event_hook", "clear_hooks",
     "trace", "tool", "eval",
+    "budget", "BudgetExceeded", "current_cost",
+    "budget_remaining", "budget_check",
     "__version__",
 ]

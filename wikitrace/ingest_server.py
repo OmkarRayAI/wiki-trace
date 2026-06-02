@@ -116,10 +116,10 @@ _pending_lock = threading.Lock()
 
 
 def _append_jsonl(path: Path, obj: dict) -> None:
-    line = json.dumps(obj, default=str) + "\n"
-    with _write_lock:
-        with path.open("a") as f:
-            f.write(line)
+    """Forward to the async batched writer. Per-request handler returns
+    immediately; disk write happens on the background writer thread."""
+    from ._writer import get_writer
+    get_writer().enqueue(path, obj)
 
 
 def _try_json(b: bytes) -> dict:

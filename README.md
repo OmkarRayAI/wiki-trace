@@ -415,6 +415,72 @@ forcing every caller to set up tracing.
 
 ---
 
+## Production runtime
+
+wiki-trace is built for real production traffic, not just offline
+ingestion.
+
+### Async batched writer
+
+Every span goes through a process-wide async writer thread: bounded
+queue (100k entries), batched flushes (100 spans or 250ms, whichever
+first), single fsync per batch. Throughput on a laptop:
+
+```
+10,000 spans across 8 threads + 8 asyncio tasks → 23,000+ spans/sec,
+zero drops.
+```
+
+Tunables via env vars: `WIKITRACE_BATCH_SIZE`, `WIKITRACE_FLUSH_INTERVAL_MS`,
+`WIKITRACE_QUEUE_MAX`. Drops are counted and exposed via
+`wikitrace._writer.writer_stats()` for ops dashboards.
+
+### Rate-limit-aware retry
+
+Provider patches automatically retry 429 / 502 / 503 / 504 / network
+blips with exponential backoff + jitter. 4xx errors (bad request,
+auth, validation) are NOT retried. `Retry-After` headers are
+honored. Each `llm_call` span carries a `retry_count` attr so you
+can spot rate-limited models in the dashboard.
+
+```python
+# All the standard env-var knobs:
+WIKITRACE_MAX_RETRIES=3
+WIKITRACE_RETRY_BASE_DELAY=0.5
+WIKITRACE_RETRY_MAX_DELAY=16.0
+```
+
+### Cost budgets
+
+Hard-cap LLM spend in CI, demos, or any batch job:
+
+```python
+import wikitrace
+from wikitrace.budget import budget, BudgetExceeded, check
+
+with budget(usd=0.50, on_exceed="raise") as b:
+    for q in questions:
+        chain.invoke({"query": q})
+        check()                       # short-circuit between iterations
+```
+
+`on_exceed="raise"` (default) stops the run when cost crosses the
+limit. `"warn"` logs to stderr and keeps going. `"silent"` records
+the breach on the budget object for later inspection. Nested budgets
+work — set a global $1 cap in CI and a tighter $0.05 cap on a single
+test.
+
+```python
+wikitrace.current_cost()       # spent in innermost active budget
+wikitrace.budget_remaining()   # how much is left
+wikitrace.budget_check()       # raise BudgetExceeded if breached
+```
+
+This is a fast local guardrail, not a substitute for provider-side
+billing limits — those still matter.
+
+---
+
 ## Pricing
 
 | | |
