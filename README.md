@@ -163,6 +163,57 @@ is awkward (e.g. FastAPI middleware).
 The SDK uses `contextvars`, so concurrent `asyncio.gather` tasks each
 keep their own span stack. No cross-task `parent_id` contamination.
 
+### 4. Eval suites
+
+Phoenix-style evals, local-first. Wrap any function in
+`@wikitrace.eval` and `.eval()` runs the suite:
+
+```python
+import wikitrace
+from wikitrace.evals import Dataset
+from wikitrace import judges
+
+ds = Dataset([
+    {"qid": "q1", "input": "what color is the sky?", "expected": ["blue"]},
+    {"qid": "q2", "input": "2+2?", "expected": "4"},
+])
+
+@wikitrace.eval(dataset=ds,
+                judges=[judges.contains_all, judges.length_within(min=1, max=200)],
+                model="gpt-4o-mini")
+def my_agent(input: str) -> str:
+    return llm(input)
+
+results = my_agent.eval()
+print(results.summary)
+# {'n': 2, 'correct': 2, 'total': 3, 'pass_rate': 0.667, 'avg_latency_ms': 412, ...}
+```
+
+Built-in judges: `exact_match`, `contains_all`, `regex_match`,
+`length_within(min, max)`, `llm_judge(rubric, model=)`. Writing your
+own is just a function `(output, ctx) -> JudgeResult`. Eval runs emit
+the same span shape as the existing eval ingestion path, so they show
+up in the dashboard's `/evals` route automatically.
+
+### 5. OpenTelemetry export
+
+Pipe wiki-trace into Phoenix, Datadog, Honeycomb, Grafana, or any
+OTLP collector:
+
+```python
+import wikitrace
+from wikitrace.otel import install
+
+install()                      # one line
+wikitrace.init(pipeline="my-app")
+# ... your code ...
+```
+
+Every wikitrace span produces a real OTel span with matching parent
+chain, attributes, status, events, and duration. Configure your OTel
+exporter however you normally would (env vars, OTLP endpoint, etc.) —
+the install hook just plugs us into the global OTel tracer.
+
 ---
 
 ## Bring your own RAG
@@ -316,10 +367,10 @@ options:
 | Sessions / users / tags | ✅ | ✅ | ✅ | ✅ |
 | Async / contextvars safe | ✅ | ✅ | ✅ | ✅ |
 | LangChain / CrewAI / ADK / Agno adapters | ✅ | LangChain only | ✅ | partial |
-| OpenTelemetry export | ❌ | ❌ | ✅ | ❌ |
+| OpenTelemetry export | ✅ | ❌ | ✅ | ❌ |
 | Hosted multi-tenant ingestion | ❌ | ✅ | ✅ (paid) | ✅ |
-| Built-in evaluator library | partial | partial | ✅ | ✅ |
-| Datasets / experiments / sweeps | ❌ | ❌ | ✅ | ✅ |
+| Built-in evaluator library | ✅ (5 judges + LLM-as-judge) | partial | ✅ (~30 evaluators) | ✅ |
+| Datasets / experiment runs | ✅ Dataset + EvalResults | ❌ | ✅ + sweeps | ✅ + sweeps |
 | RBAC, alerts, SOC 2 | ❌ | ✅ | ✅ (paid) | ✅ |
 | Node / Go / Rust SDKs | ❌ | ✅ | partial | partial |
 | Free for production traffic at scale | ✅ | depends | ✅ | depends |

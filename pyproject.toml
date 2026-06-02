@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wikitrace"
-version = "0.1.0"
+version = "0.2.0"
 description = "Knowledge quality tracing for LLM features. Drop a PDF, ask a question, see every citation traced."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -42,11 +42,17 @@ adk = [
 agno = [
     "agno>=0.1.0",
 ]
+otel = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+]
 all = [
     "langchain-core>=0.3.0",
     "crewai>=0.70.0",
     "google-adk>=0.1.0",
     "agno>=0.1.0",
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
 ]
 
 [project.urls]
@@ -68,12 +74,14 @@ packages = [
     "wikitrace.integrations.agno",
     "wikitrace.integrations.openai",
     "wikitrace.integrations.anthropic",
+    "wikitrace.integrations.otel",
     "wikitrace.langchain",
     "wikitrace.crewai",
     "wikitrace.adk",
     "wikitrace.agno",
     "wikitrace.openai",
     "wikitrace.anthropic",
+    "wikitrace.otel",
 ]
 
 [tool.setuptools.package-data]
