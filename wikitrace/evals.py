@@ -113,6 +113,23 @@ class Dataset:
                 obj.update(r.metadata)
                 f.write(json.dumps(obj, default=str) + "\n")
 
+    def checksum(self) -> str:
+        """Stable hash of the dataset content. Use this to assert that
+        two eval runs were graded against the same dataset version
+        before comparing them — catches the "you changed the test set,
+        scores aren't comparable" footgun."""
+        import hashlib
+        h = hashlib.sha256()
+        for r in self.rows:
+            blob = json.dumps(
+                {"qid": r.qid, "input": r.input, "expected": r.expected,
+                 "metadata": r.metadata},
+                default=str, sort_keys=True,
+            )
+            h.update(blob.encode("utf-8"))
+            h.update(b"\n")
+        return h.hexdigest()[:16]
+
 
 # ─── Run results ────────────────────────────────────────────────────────
 
@@ -269,3 +286,215 @@ def run_eval(
         sdk.end()
 
     return EvalResults(run_id=run_id, trace_id=trace_id, rows=rows)
+
+
+# ─── Run loading + comparison ───────────────────────────────────────────
+# Reading historical runs back off disk so we can compare them. The
+# eval runner emits eval / question / agent_call spans; load_run()
+# reverses the structure into an EvalResults object.
+
+def load_run(
+    *,
+    run_id: str | None = None,
+    trace_id: str | None = None,
+    trace_dir: str | Path = ".wikitrace",
+) -> EvalResults | None:
+    """Reconstruct an EvalResults from spans on disk.
+
+    Pass either ``run_id`` (matches eval span attrs.run_id) or
+    ``trace_id`` (matches the underlying trace). Returns None if the
+    run can't be found.
+    """
+    spans_path = Path(trace_dir) / "spans.jsonl"
+    if not spans_path.exists():
+        return None
+
+    spans = [json.loads(l) for l in spans_path.read_text().splitlines() if l.strip()]
+
+    # 1) Find the matching eval root span.
+    eval_root: dict | None = None
+    for s in spans:
+        if s["name"] != "eval":
+            continue
+        if trace_id and s["trace_id"] == trace_id:
+            eval_root = s
+            break
+        if run_id and (s["attrs"] or {}).get("run_id") == run_id:
+            eval_root = s
+            break
+    if eval_root is None:
+        return None
+
+    rid = (eval_root["attrs"] or {}).get("run_id") or eval_root["id"]
+    tid = eval_root["trace_id"]
+
+    # 2) Group spans by trace_id (eval span trees are self-contained)
+    #    and assemble agent_call + judge spans per qid.
+    agent_calls: dict[str, dict] = {}
+    judges_by_qid: dict[str, list[dict]] = {}
+    questions: dict[str, dict] = {}
+
+    for s in spans:
+        if s["trace_id"] != tid:
+            continue
+        if s["name"] == "agent_call":
+            qid = (s["attrs"] or {}).get("qid")
+            if qid:
+                agent_calls[qid] = s
+        elif s["name"] == "judge":
+            qid = (s["attrs"] or {}).get("qid")
+            if qid:
+                judges_by_qid.setdefault(qid, []).append(s)
+        elif s["name"] == "question":
+            qid = (s["attrs"] or {}).get("qid")
+            if qid:
+                questions[qid] = s
+
+    rows: list[EvalRowResult] = []
+    for qid, ac in agent_calls.items():
+        a = ac["attrs"] or {}
+        q = (questions.get(qid, {}).get("attrs") or {})
+        jrs = []
+        for j in judges_by_qid.get(qid, []):
+            ja = j["attrs"] or {}
+            jrs.append(JudgeResult(
+                correct=int(ja.get("correct") or 0),
+                total=int(ja.get("total") or 0),
+                name=str(ja.get("judge") or "judge"),
+                detail=ja.get("detail") or {},
+            ))
+        rows.append(EvalRowResult(
+            qid=qid,
+            input=q.get("question"),
+            expected=None,
+            output=None,
+            correct=int(a.get("correct") or 0),
+            total=int(a.get("total") or 0),
+            latency_ms=int(float(a.get("latency_s") or 0) * 1000),
+            judge_results=jrs,
+            error=a.get("error") if a.get("status") == "error" else None,
+        ))
+
+    rows.sort(key=lambda r: r.qid)
+    return EvalResults(run_id=rid, trace_id=tid, rows=rows)
+
+
+@dataclass
+class QidDelta:
+    """Per-question diff between two runs."""
+    qid: str
+    a_score: float
+    b_score: float
+    a_correct: int
+    a_total: int
+    b_correct: int
+    b_total: int
+    a_latency_ms: int
+    b_latency_ms: int
+
+    @property
+    def score_delta(self) -> float:
+        return self.b_score - self.a_score
+
+    @property
+    def status(self) -> str:
+        """One of: regression, improvement, unchanged, missing_a, missing_b."""
+        if self.a_total == 0 and self.b_total > 0:
+            return "missing_a"
+        if self.b_total == 0 and self.a_total > 0:
+            return "missing_b"
+        d = self.score_delta
+        if d < -1e-9:
+            return "regression"
+        if d > 1e-9:
+            return "improvement"
+        return "unchanged"
+
+
+@dataclass
+class RunDiff:
+    """The result of :func:`compare_runs`. Designed for a side-by-side
+    UI but useful in plain Python too."""
+    a: EvalResults
+    b: EvalResults
+    deltas: list[QidDelta]
+
+    @property
+    def regressions(self) -> list[QidDelta]:
+        return [d for d in self.deltas if d.status == "regression"]
+
+    @property
+    def improvements(self) -> list[QidDelta]:
+        return [d for d in self.deltas if d.status == "improvement"]
+
+    @property
+    def unchanged(self) -> list[QidDelta]:
+        return [d for d in self.deltas if d.status == "unchanged"]
+
+    @property
+    def summary(self) -> dict[str, Any]:
+        a_sum = self.a.summary
+        b_sum = self.b.summary
+        return {
+            "a": {
+                "run_id": self.a.run_id,
+                "n": a_sum["n"],
+                "pass_rate": a_sum["pass_rate"],
+                "correct": a_sum["correct"],
+                "total": a_sum["total"],
+                "avg_latency_ms": a_sum["avg_latency_ms"],
+            },
+            "b": {
+                "run_id": self.b.run_id,
+                "n": b_sum["n"],
+                "pass_rate": b_sum["pass_rate"],
+                "correct": b_sum["correct"],
+                "total": b_sum["total"],
+                "avg_latency_ms": b_sum["avg_latency_ms"],
+            },
+            "pass_rate_delta": b_sum["pass_rate"] - a_sum["pass_rate"],
+            "latency_delta_ms": b_sum["avg_latency_ms"] - a_sum["avg_latency_ms"],
+            "regressions": len(self.regressions),
+            "improvements": len(self.improvements),
+            "unchanged": len(self.unchanged),
+        }
+
+    def print_table(self, *, max_rows: int = 100) -> None:
+        """Quick text rendering — handy in REPLs and CI logs."""
+        print(f"A: {self.a.run_id}  pass_rate={self.a.summary['pass_rate']:.3f}")
+        print(f"B: {self.b.run_id}  pass_rate={self.b.summary['pass_rate']:.3f}")
+        print(f"Δ pass_rate = {self.summary['pass_rate_delta']:+.3f}")
+        print(f"Δ latency_ms = {self.summary['latency_delta_ms']:+d}")
+        print(f"  regressions={len(self.regressions)}  improvements={len(self.improvements)}  unchanged={len(self.unchanged)}")
+        print()
+        print(f"  {'qid':12s} {'A':>7s} {'B':>7s} {'Δ':>8s}  status")
+        for d in self.deltas[:max_rows]:
+            mark = {"regression": "↓", "improvement": "↑",
+                    "unchanged": " ", "missing_a": "?", "missing_b": "?"}[d.status]
+            print(f"  {d.qid:12s} {d.a_score:7.3f} {d.b_score:7.3f} "
+                  f"{d.score_delta:+8.3f}  {mark} {d.status}")
+
+
+def compare_runs(a: EvalResults, b: EvalResults) -> RunDiff:
+    """Diff two EvalResults by qid. Missing rows on either side become
+    ``missing_a`` / ``missing_b`` deltas — they don't crash the diff."""
+    a_by_qid = {r.qid: r for r in a.rows}
+    b_by_qid = {r.qid: r for r in b.rows}
+    qids = sorted(set(a_by_qid) | set(b_by_qid))
+
+    deltas: list[QidDelta] = []
+    for qid in qids:
+        ar = a_by_qid.get(qid)
+        br = b_by_qid.get(qid)
+        deltas.append(QidDelta(
+            qid=qid,
+            a_score=ar.score if ar else 0.0,
+            b_score=br.score if br else 0.0,
+            a_correct=ar.correct if ar else 0,
+            a_total=ar.total if ar else 0,
+            b_correct=br.correct if br else 0,
+            b_total=br.total if br else 0,
+            a_latency_ms=ar.latency_ms if ar else 0,
+            b_latency_ms=br.latency_ms if br else 0,
+        ))
+    return RunDiff(a=a, b=b, deltas=deltas)

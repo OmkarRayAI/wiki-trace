@@ -274,16 +274,32 @@ and the abusive traffic without writing a query.
 
 ## Evaluators
 
-Built-in judges plus LLM-as-judge rubrics, all running locally.
+Fifteen built-in judges plus LLM-as-judge rubrics, all running locally.
 
 ```python
 from wikitrace import judges
 
+# Deterministic — no LLM calls
 judges.exact_match
 judges.contains_all
+judges.contains_none                    # safety lists, banned terms, leaked secrets
 judges.regex_match
 judges.length_within(min=1, max=200)
-judges.llm_judge(rubric="Is the answer factually correct?", model="gpt-4o-mini")
+judges.json_valid                       # strips ```json fences
+judges.schema_match({"type": "object", "required": [...]})
+judges.sql_valid                        # syntax check via sqlite3 EXPLAIN
+judges.no_pii                           # email / phone / SSN / credit card / api keys
+judges.levenshtein_threshold(0.8)
+judges.embedding_cosine(0.8, model="text-embedding-3-small")  # lazy-imports openai
+
+# LLM-as-judge — Phoenix-style
+judges.llm_judge(rubric="...")
+judges.llm_classify(rubric="...", classes=["relevant", "partial", "off-topic"])
+judges.hallucination()                  # consistent with ground truth?
+judges.rag_faithfulness()               # consistent with retrieved context?
+judges.rag_context_precision()          # is the retrieved context relevant?
+judges.toxicity()
+judges.instruction_following("respond in JSON")
 ```
 
 Writing your own is just a function `(output, ctx) -> JudgeResult`.
@@ -319,8 +335,35 @@ print(results.summary)
 ```
 
 Eval runs emit the same span shape as the live ingestion path, so they
-show up in the dashboard's `/evals` route automatically. Re-run with a
-new prompt or model and compare side-by-side.
+show up in the dashboard's `/evals` route automatically.
+
+### Comparing runs
+
+Pull any two historical runs off disk and diff them by qid:
+
+```python
+from wikitrace.evals import load_run, compare_runs
+
+a = load_run(run_id="agent_v1-1700000000")
+b = load_run(run_id="agent_v2-1700000123")
+
+diff = compare_runs(a, b)
+diff.print_table()
+# A: agent_v1  pass_rate=0.778
+# B: agent_v2  pass_rate=0.778
+# Δ pass_rate = +0.000
+#   regressions=1  improvements=1  unchanged=2
+#
+#   qid              A       B        Δ  status
+#   q2           1.000   0.500   -0.500  ↓ regression
+#   q3           0.667   1.000   +0.333  ↑ improvement
+```
+
+Per-qid deltas surface specific regressions and improvements **even
+when the aggregate pass rate is flat** — exactly the case where a
+"score went down" alert would miss the issue. Use
+`Dataset.checksum()` to assert two runs were graded against the same
+dataset version before comparing.
 
 ---
 
