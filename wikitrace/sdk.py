@@ -5,20 +5,92 @@ A trace is a flat list of spans with parent_id pointers. Each span has:
 
 cite() emits a child event on the current span rather than a new span,
 because citations are dense (one section can cite three ranges).
+
+Two ways to record a span:
+
+* ``span(name, **attrs)`` — context manager, written once on close.
+  Use this when the unit of work is materialized before you record it
+  (the original wiki-trace flow). Nest freely; nesting is what models
+  multi-step planners (planner → tool → reflect → tool → answer):
+
+      with span("agent_call", agent="planner-rag", qid="q1"):
+          with step("plan"):
+              ...
+          with step("tool_call", tool="search"):
+              ...
+          with step("answer"):
+              ...
+
+  ``step()`` is an alias of ``span()`` with semantic intent — every
+  step is just a child span.
+
+* ``span_open() / span_event() / span_close()`` — open-span append model
+  for streaming agents. The start record lands on disk immediately;
+  events (e.g. tokens) are appended as they arrive; the end record
+  closes the span. Live records go to ``spans-live.jsonl`` so the
+  existing dashboard, which reads ``spans.jsonl`` only, is unaffected:
+
+      h = span_open("llm_call", model="gpt-4o")
+      for tok in stream:
+          span_event(h, "token", text=tok)
+      span_close(h, answer_chars=len(full))
+
+  When a streaming span closes, a normal final record is also written
+  to ``spans.jsonl`` so historical reads stay correct.
+
+Concurrency
+-----------
+
+The span stack lives in a :class:`contextvars.ContextVar` so concurrent
+asyncio tasks and threadpool workers each see their own nesting. File
+writes are guarded by a process-wide :class:`threading.Lock` so JSONL
+records never interleave.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import uuid
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from threading import local
 from typing import Any, Iterator
 
-_state = local()
+# ─── Process-wide trace state ──────────────────────────────────────────
+# A trace is begun via init() and ended via end(). At most one trace is
+# live in the process at a time (we run the same way as today). These
+# fields are written once at init() and read concurrently afterward, so
+# a plain module-level dict + an init lock is enough.
+
+_init_lock = threading.Lock()
+_write_lock = threading.Lock()
+
+_state: dict[str, Any] = {
+    "trace_id": None,
+    "pipeline": None,
+    "trace_dir": None,
+    "spans_path": None,
+    "traces_path": None,
+    "live_path": None,
+    "start_ts": None,
+    "attrs": {},
+}
+
+# ─── Per-context span stack ────────────────────────────────────────────
+# A ContextVar holding an immutable tuple of span records. Every push
+# replaces the var with a new tuple, so child asyncio tasks fork their
+# own stack instead of sharing the parent's mutable list.
+
+_span_stack: ContextVar[tuple] = ContextVar("wikitrace_span_stack", default=())
+
+# Ambient session attrs (session_id, user_id, tags, ...) that are
+# merged onto every span created inside session() / set_session().
+_session_attrs: ContextVar[dict] = ContextVar(
+    "wikitrace_session_attrs", default={}
+)
 
 
 def _now() -> float:
@@ -29,58 +101,79 @@ def _new_id() -> str:
     return uuid.uuid4().hex[:16]
 
 
-def _trace_dir() -> Path:
-    d = getattr(_state, "trace_dir", None)
-    if d is None:
-        raise RuntimeError("wikitrace.init() not called")
-    return d
+def _push(rec: dict) -> None:
+    _span_stack.set(_span_stack.get() + (rec,))
+
+
+def _pop_specific(rec: dict) -> None:
+    """Remove a specific span record from the stack — supports out-of-
+    order closes (e.g. concurrent streams that finish in any order)."""
+    cur = _span_stack.get()
+    new = tuple(s for s in cur if s is not rec)
+    _span_stack.set(new)
+
+
+def _current_parent_id() -> str | None:
+    cur = _span_stack.get()
+    return cur[-1]["id"] if cur else None
+
+
+def _ambient_session() -> dict:
+    return dict(_session_attrs.get() or {})
 
 
 def init(pipeline: str, trace_dir: str | os.PathLike = ".wikitrace",
          attrs: dict[str, Any] | None = None) -> str:
     """Begin a trace. Returns trace_id."""
-    root = Path(trace_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    trace_id = _new_id()
-    _state.trace_dir = root
-    _state.trace_id = trace_id
-    _state.pipeline = pipeline
-    _state.span_stack = []
-    _state.spans_path = root / "spans.jsonl"
-    _state.traces_path = root / "traces.jsonl"
-    _state.start_ts = _now()
-    _state.attrs = dict(attrs or {})
-    return trace_id
+    with _init_lock:
+        root = Path(trace_dir)
+        root.mkdir(parents=True, exist_ok=True)
+        trace_id = _new_id()
+        _state["trace_id"] = trace_id
+        _state["pipeline"] = pipeline
+        _state["trace_dir"] = root
+        _state["spans_path"] = root / "spans.jsonl"
+        _state["traces_path"] = root / "traces.jsonl"
+        _state["live_path"] = root / "spans-live.jsonl"
+        _state["start_ts"] = _now()
+        _state["attrs"] = dict(attrs or {})
+        _span_stack.set(())
+        return trace_id
 
 
 def current_trace_id() -> str | None:
-    return getattr(_state, "trace_id", None)
+    return _state.get("trace_id")
 
 
 def _write(path: Path, obj: dict) -> None:
-    with path.open("a") as f:
-        f.write(json.dumps(obj, default=str) + "\n")
+    line = json.dumps(obj, default=str) + "\n"
+    with _write_lock:
+        with path.open("a") as f:
+            f.write(line)
+
+
+def _build_span_record(name: str, attrs: dict[str, Any]) -> dict:
+    if _state.get("trace_id") is None:
+        raise RuntimeError("wikitrace.init() not called")
+    merged = {**_ambient_session(), **attrs}
+    return {
+        "id": _new_id(),
+        "parent_id": _current_parent_id(),
+        "trace_id": _state["trace_id"],
+        "pipeline": _state["pipeline"],
+        "name": name,
+        "start_ts": _now(),
+        "end_ts": None,
+        "attrs": merged,
+        "events": [],
+        "status": "ok",
+    }
 
 
 @contextmanager
 def span(name: str, **attrs: Any) -> Iterator[dict]:
-    if getattr(_state, "trace_id", None) is None:
-        raise RuntimeError("wikitrace.init() not called")
-    stack = _state.span_stack
-    parent_id = stack[-1]["id"] if stack else None
-    rec = {
-        "id": _new_id(),
-        "parent_id": parent_id,
-        "trace_id": _state.trace_id,
-        "pipeline": _state.pipeline,
-        "name": name,
-        "start_ts": _now(),
-        "end_ts": None,
-        "attrs": dict(attrs),
-        "events": [],
-        "status": "ok",
-    }
-    stack.append(rec)
+    rec = _build_span_record(name, attrs)
+    _push(rec)
     try:
         yield rec
     except Exception as e:
@@ -89,17 +182,17 @@ def span(name: str, **attrs: Any) -> Iterator[dict]:
         raise
     finally:
         rec["end_ts"] = _now()
-        stack.pop()
-        _write(_state.spans_path, rec)
+        _pop_specific(rec)
+        _write(_state["spans_path"], rec)
 
 
 def cite(source: str, range: tuple[int, int] | None = None,
          claim: str | None = None, **extra: Any) -> None:
     """Attach a citation to the current span."""
-    stack = getattr(_state, "span_stack", None)
-    if not stack:
+    cur = _span_stack.get()
+    if not cur:
         raise RuntimeError("cite() called outside a span")
-    stack[-1]["events"].append({
+    cur[-1]["events"].append({
         "type": "citation",
         "ts": _now(),
         "source": source,
@@ -109,18 +202,140 @@ def cite(source: str, range: tuple[int, int] | None = None,
     })
 
 
+# ─── Multi-step planners ────────────────────────────────────────────────
+# step() is span() with semantic intent. Anything you'd call a planner
+# step (tool call, reflection, sub-plan) is just a nested span.
+step = span
+
+
+# ─── Streaming agents ───────────────────────────────────────────────────
+# Open-span append model. The start record is flushed immediately so a
+# tail-style consumer can render the span as in-flight; events are
+# appended as they arrive; the close writes both the live end record
+# AND the final span record to spans.jsonl, so the dashboard's existing
+# reader keeps working unchanged.
+
+def _live_write(obj: dict) -> None:
+    path = _state.get("live_path")
+    if path is None:
+        raise RuntimeError("wikitrace.init() not called")
+    _write(path, obj)
+
+
+def span_open(name: str, **attrs: Any) -> dict:
+    """Open a streaming span. Returns a handle to pass to span_event /
+    span_close. The handle is also pushed onto the active span stack so
+    any nested span() / step() / cite() inside the streaming window
+    parents correctly.
+    """
+    rec = _build_span_record(name, attrs)
+    _push(rec)
+    _live_write({"kind": "span_start", **rec})
+    return rec
+
+
+def span_event(handle: dict, event_type: str, **fields: Any) -> None:
+    """Append a streaming event (e.g. a token) to an open span. Mutates
+    the handle's events list AND writes a live record so consumers can
+    tail it without waiting for span_close.
+    """
+    ev = {"type": event_type, "ts": _now(), **fields}
+    handle["events"].append(ev)
+    _live_write({
+        "kind": "span_event",
+        "trace_id": handle["trace_id"],
+        "span_id": handle["id"],
+        "event": ev,
+    })
+
+
+def span_close(handle: dict, status: str = "ok", **attrs: Any) -> None:
+    """Close a streaming span. Writes a live end record AND the final
+    span record to spans.jsonl, matching the shape of span()-recorded
+    spans so the dashboard reads it identically.
+    """
+    handle["end_ts"] = _now()
+    handle["status"] = status
+    if attrs:
+        handle["attrs"].update(attrs)
+    _pop_specific(handle)
+    _live_write({"kind": "span_end", "trace_id": handle["trace_id"],
+                 "span_id": handle["id"], "end_ts": handle["end_ts"],
+                 "status": status})
+    _write(_state["spans_path"], handle)
+
+
 def end(status: str = "ok", attrs: dict[str, Any] | None = None) -> None:
     """Close the current trace, write trace summary record."""
-    if getattr(_state, "trace_id", None) is None:
+    if _state.get("trace_id") is None:
         return
     rec = {
-        "trace_id": _state.trace_id,
-        "pipeline": _state.pipeline,
-        "start_ts": _state.start_ts,
+        "trace_id": _state["trace_id"],
+        "pipeline": _state["pipeline"],
+        "start_ts": _state["start_ts"],
         "end_ts": _now(),
         "status": status,
-        "attrs": {**_state.attrs, **(attrs or {})},
+        "attrs": {**_state["attrs"], **(attrs or {})},
     }
-    _write(_state.traces_path, rec)
-    _state.trace_id = None
-    _state.span_stack = []
+    _write(_state["traces_path"], rec)
+    _state["trace_id"] = None
+    _span_stack.set(())
+
+
+# ─── Sessions / users / tags ────────────────────────────────────────────
+# Devs grouping traces by conversation, request, or user shouldn't have
+# to thread those fields through every span() call. session() sets
+# ambient attrs that get merged onto every span created inside it.
+
+@contextmanager
+def session(
+    id: str | None = None,
+    user: str | None = None,
+    tags: list[str] | None = None,
+    **extra: Any,
+) -> Iterator[dict]:
+    """Stamp every span created inside this block with session metadata.
+
+        with wikitrace.session(id="conv-42", user="alice", tags=["prod"]):
+            answer = chain.invoke({"query": q})
+
+    Nested sessions merge onto outer ones (inner overrides on conflict).
+    """
+    base = _ambient_session()
+    new = dict(base)
+    if id is not None:
+        new["session_id"] = id
+    if user is not None:
+        new["user_id"] = user
+    if tags:
+        new["tags"] = list(tags) + (base.get("tags") or [])
+    new.update(extra)
+    token = _session_attrs.set(new)
+    try:
+        yield new
+    finally:
+        _session_attrs.reset(token)
+
+
+def set_session(
+    id: str | None = None,
+    user: str | None = None,
+    tags: list[str] | None = None,
+    **extra: Any,
+) -> None:
+    """Imperative variant of session(). Stamps current context until the
+    next set_session() / clear_session() call. Useful at request entry
+    in a web handler where a context manager is awkward."""
+    new = _ambient_session()
+    if id is not None:
+        new["session_id"] = id
+    if user is not None:
+        new["user_id"] = user
+    if tags:
+        new["tags"] = list(tags) + (new.get("tags") or [])
+    new.update(extra)
+    _session_attrs.set(new)
+
+
+def clear_session() -> None:
+    _session_attrs.set({})
