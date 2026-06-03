@@ -123,6 +123,62 @@ import hashlib  # noqa: E402  (import after threading is fine; stdlib only)
 _cache: dict[tuple[str, str, str], tuple[bytes, str]] = {}
 _cache_lock = threading.Lock()
 
+# Helicone-RateLimit-Policy enforcement. Sliding window per (user, policy)
+# string. Timestamps stored as monotonic floats so window expiry survives
+# wall-clock drift. Concurrency: ThreadingHTTPServer means multiple
+# requests share these dicts; guarded by _ratelimit_lock.
+_rate_buckets: dict[tuple[str, str], list[float]] = {}
+_ratelimit_lock = threading.Lock()
+
+
+def _parse_rate_policy(policy: str) -> tuple[int, float] | None:
+    """Parse `<N>;w=<W>` (e.g. '2;w=10') into (limit, window_seconds).
+    Returns None if the policy is unparseable so the caller can fall
+    through to no-limit behavior rather than 500ing on a bad header.
+    """
+    try:
+        parts = policy.split(";")
+        limit = int(parts[0].strip())
+        window = 60.0
+        for p in parts[1:]:
+            k, _, v = p.strip().partition("=")
+            if k == "w":
+                window = float(v)
+        if limit < 1 or window <= 0:
+            return None
+        return (limit, window)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _ratelimit_check(user_id: str, policy: str) -> bool:
+    """Return True if the request is within the policy and may proceed.
+    Returns False if rate-limited (caller should respond 429). Caller is
+    responsible for ensuring `policy` and `user_id` are non-empty strings.
+    """
+    parsed = _parse_rate_policy(policy)
+    if parsed is None:
+        return True  # malformed policy — fail open, never block traffic
+    limit, window = parsed
+    cutoff = time.monotonic() - window
+    key = (user_id, policy)
+    with _ratelimit_lock:
+        bucket = _rate_buckets.get(key)
+        if bucket is None:
+            bucket = []
+            _rate_buckets[key] = bucket
+        # Drop expired entries. List-walk is fine; buckets stay tiny
+        # because the window is small and limits are small.
+        i = 0
+        while i < len(bucket) and bucket[i] < cutoff:
+            i += 1
+        if i:
+            del bucket[:i]
+        if len(bucket) >= limit:
+            return False
+        bucket.append(time.monotonic())
+        return True
+
 
 def _append_jsonl(path: Path, obj: dict) -> None:
     """Forward to the async batched writer. Per-request handler returns
@@ -386,6 +442,22 @@ class IngestHandler(BaseHTTPRequestHandler):
         forwarded transparently (we still log the request, but the
         response body is passed through chunk-by-chunk without buffering).
         """
+        # ── Helicone-RateLimit-Policy enforcement ─────────────────────
+        # Applied before reading body or contacting upstream. Counter is
+        # keyed by (user_id, policy) so different users have independent
+        # buckets and different policies don't share state. If the policy
+        # header is absent or malformed, no limit is enforced.
+        rl_policy = self.headers.get("Helicone-RateLimit-Policy")
+        if rl_policy:
+            user_id = self.headers.get("Helicone-User-Id") or "_default"
+            if not _ratelimit_check(user_id, rl_policy):
+                self._send(429, {
+                    "error": "rate limit exceeded",
+                    "policy": rl_policy,
+                    "user": user_id,
+                })
+                return
+
         target_override = self.headers.get("Helicone-Target-Url")
         if target_override:
             target = target_override.rstrip("/") + suffix
