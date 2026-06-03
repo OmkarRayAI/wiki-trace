@@ -112,6 +112,37 @@ def create_app(db_path: str, admin_key: str | None) -> FastAPI:
     async def health():
         return {"ok": True, "service": "wikitrace-cloud"}
 
+    # ─── Self-service signup ─────────────────────────────────────────────
+    # Open by default. Set WIKITRACE_CLOUD_SIGNUP=disabled to require
+    # admin-key tenant creation only (single-org deployments).
+    @app.post("/v1/signup")
+    async def signup(payload: dict):
+        if os.environ.get("WIKITRACE_CLOUD_SIGNUP", "open") == "disabled":
+            raise HTTPException(
+                status_code=403,
+                detail="self-service signup is disabled on this server",
+            )
+        name = (payload.get("name") or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name required")
+        if len(name) > 200:
+            raise HTTPException(status_code=400, detail="name too long")
+        # Optional metadata: email, contact info — saved verbatim, not validated
+        metadata = payload.get("metadata") or {}
+        if not isinstance(metadata, dict):
+            raise HTTPException(status_code=400, detail="metadata must be object")
+        tenant_id = _new_id()
+        await db.create_tenant(tenant_id, name, metadata)
+        key = generate_key()
+        await db.create_api_key(key.key_id, tenant_id, key.key_hash, "initial")
+        return {
+            "tenant_id": tenant_id,
+            "name": name,
+            "api_key": key.plaintext,
+            "key_id": key.key_id,
+            "message": "Save this api_key — it is shown only once.",
+        }
+
     # ─── Admin: tenant + key management ──────────────────────────────────
     @app.post("/v1/admin/tenants")
     async def create_tenant(payload: dict,
@@ -165,6 +196,21 @@ def create_app(db_path: str, admin_key: str | None) -> FastAPI:
                            x_admin_key: str | None = Header(None)):
         require_admin(x_admin_key)
         return await db.tenant_stats(tenant_id)
+
+    @app.get("/v1/admin/usage")
+    async def admin_usage(days: int = 30,
+                          x_admin_key: str | None = Header(None)):
+        """Cross-tenant usage rollup for the operator console."""
+        require_admin(x_admin_key)
+        return {"days": days, "tenants": await db.all_tenant_usage(days=days)}
+
+    @app.get("/v1/usage")
+    async def my_usage(days: int = 30,
+                       x_api_key: str | None = Header(None)):
+        """Tenant-scoped usage detail. Same shape as admin per-tenant
+        but the caller is identified by their session key."""
+        info = await require_tenant(x_api_key)
+        return await db.usage_summary(info["tenant_id"], days=days)
 
     # ─── Ingest (mirror local server) ───────────────────────────────────
     @app.post("/v1/init")
