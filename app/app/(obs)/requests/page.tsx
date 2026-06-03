@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { loadRequests, distinctModels } from "@/lib/traces";
+import { loadRequestsAsync, distinctModelsAsync } from "@/lib/traces";
 import { PageTitle, Empty } from "@/components/widgets";
 import type { RequestRow } from "@/lib/types";
 
@@ -88,8 +88,10 @@ export default async function RequestsPage({
     })(),
   };
 
-  const rows = loadRequests(filter);
-  const models = distinctModels();
+  const [rows, models] = await Promise.all([
+    loadRequestsAsync(filter),
+    distinctModelsAsync(),
+  ]);
 
   const totalCost = rows.reduce((a, r) => a + (r.cost_usd ?? 0), 0);
   const totalTokens = rows.reduce((a, r) => a + r.total_tokens, 0);

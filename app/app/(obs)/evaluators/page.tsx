@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { judgeRollups } from "@/lib/traces";
+import { judgeRollupsAsync } from "@/lib/traces";
 import { PageTitle } from "@/components/widgets";
 
 export const dynamic = "force-dynamic";
@@ -63,8 +63,8 @@ function KindBadge({ kind }: { kind: "deterministic" | "llm" | "custom" }) {
 
 const COLS = "minmax(180px, 1fr) 70px minmax(220px, 1.2fr) 80px 90px 90px";
 
-export default function EvaluatorsPage() {
-  const rows = judgeRollups();
+export default async function EvaluatorsPage() {
+  const rows = await judgeRollupsAsync();
   const used = rows.filter((r) => r.rows_scored > 0);
   const totalRows = used.reduce((a, r) => a + r.rows_scored, 0);
 

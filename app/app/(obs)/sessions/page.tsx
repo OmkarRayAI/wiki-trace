@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { sessionRollups } from "@/lib/traces";
+import { sessionRollupsAsync } from "@/lib/traces";
 import { PageTitle, Empty } from "@/components/widgets";
 
 export const dynamic = "force-dynamic";
@@ -27,8 +27,8 @@ function fmtDuration(start: number, end: number) {
   return `${(s / 3600).toFixed(1)}h`;
 }
 
-export default function SessionsPage() {
-  const rows = sessionRollups();
+export default async function SessionsPage() {
+  const rows = await sessionRollupsAsync();
 
   return (
     <>

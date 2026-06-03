@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { judgeByName, judgeScoredRows } from "@/lib/traces";
+import { judgeByNameAsync, judgeScoredRowsAsync } from "@/lib/traces";
 import { PageTitle, CrumbBack } from "@/components/widgets";
 
 export const dynamic = "force-dynamic";
@@ -37,10 +37,10 @@ export default async function EvaluatorDetail({
 }) {
   const { name } = await params;
   const decoded = decodeURIComponent(name);
-  const judge = judgeByName(decoded);
+  const judge = await judgeByNameAsync(decoded);
   if (!judge) notFound();
 
-  const rows = judgeScoredRows(decoded);
+  const rows = await judgeScoredRowsAsync(decoded);
   const passing = rows.filter((r) => r.total > 0 && r.correct === r.total).length;
   const failing = rows.filter((r) => r.total > 0 && r.correct === 0).length;
 

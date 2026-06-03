@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { propertyRollups } from "@/lib/traces";
+import { propertyRollupsAsync } from "@/lib/traces";
 import { PageTitle, Empty } from "@/components/widgets";
 
 export const dynamic = "force-dynamic";
@@ -11,8 +11,8 @@ function fmtCost(c: number) {
   return `$${c.toFixed(2)}`;
 }
 
-export default function PropertiesPage() {
-  const rows = propertyRollups();
+export default async function PropertiesPage() {
+  const rows = await propertyRollupsAsync();
 
   // Group by key for the dual-column layout
   const byKey: Record<string, typeof rows> = {};
