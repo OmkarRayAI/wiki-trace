@@ -49,11 +49,19 @@ def set_price(model: str, input_per_1m_usd: float, output_per_1m_usd: float) -> 
 
 
 def get_price(model: str) -> Tuple[float, float] | None:
-    """Best-effort lookup. Tries the exact model id, then falls back
-    to the longest registered prefix (so 'gpt-4o-2024-08-06' matches
-    'gpt-4o'). Returns None if nothing matches."""
+    """Best-effort lookup. Tries the exact model id, then strips an
+    OpenRouter-style ``<provider>/`` prefix (so ``openai/gpt-4o-mini``
+    matches ``gpt-4o-mini``), then falls back to the longest registered
+    prefix (so ``gpt-4o-2024-08-06`` matches ``gpt-4o``). Returns None
+    if nothing matches."""
     if model in _PRICES:
         return _PRICES[model]
+    # OpenRouter / proxy convention: "<provider>/<model_id>".
+    if "/" in model:
+        bare = model.split("/", 1)[1]
+        if bare in _PRICES:
+            return _PRICES[bare]
+        model = bare  # fall through to prefix match using the bare id
     best: Tuple[str, Tuple[float, float]] | None = None
     for key, val in _PRICES.items():
         if model.startswith(key) and (best is None or len(key) > len(best[0])):
