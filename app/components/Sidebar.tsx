@@ -9,6 +9,7 @@ const NAV = [
   { href: "/users", label: "Users", section: "obs" },
   { href: "/properties", label: "Properties", section: "obs" },
   { href: "/evaluators", label: "Evaluators", section: "obs" },
+  { href: "/contribution", label: "Contribution", section: "obs" },
   { href: "/playground", label: "Playground", section: "wiki" },
   { href: "/pages", label: "Knowledge", group: ["/pages", "/sources"], section: "wiki" },
   { href: "/evals", label: "Evaluations", section: "wiki" },
