@@ -114,6 +114,15 @@ _write_lock = threading.Lock()
 _pending: dict[str, dict] = {}
 _pending_lock = threading.Lock()
 
+# Helicone-Cache-Enabled response cache. Keyed by
+# (provider, suffix, sha256(body_bytes)) so identical request bodies on
+# the same upstream path share a slot, but different `messages` produce
+# different keys. Values are (body_bytes, content_type).
+import hashlib  # noqa: E402  (import after threading is fine; stdlib only)
+
+_cache: dict[tuple[str, str, str], tuple[bytes, str]] = {}
+_cache_lock = threading.Lock()
+
 
 def _append_jsonl(path: Path, obj: dict) -> None:
     """Forward to the async batched writer. Per-request handler returns
@@ -406,6 +415,31 @@ class IngestHandler(BaseHTTPRequestHandler):
         is_stream = bool(isinstance(req_json, dict) and req_json.get("stream"))
         start_ts = _now()
 
+        # ── Helicone response cache ────────────────────────────────────
+        # Only consult/populate when Helicone-Cache-Enabled: true. Stream
+        # responses are not cached — cache hits would have to replay a
+        # synthesized SSE stream, which is more correctness risk than
+        # the conformance suite needs.
+        cache_enabled = bool(hh.get("cache_enabled")) and not is_stream
+        cache_key: tuple[str, str, str] | None = None
+        if cache_enabled:
+            cache_key = (provider, suffix,
+                         hashlib.sha256(body_bytes).hexdigest())
+            with _cache_lock:
+                hit = _cache.get(cache_key)
+            if hit is not None:
+                cached_body, cached_ctype = hit
+                self._send_passthrough(
+                    200, cached_body, cached_ctype,
+                    extra_headers={"helicone-cache": "HIT"},
+                )
+                self._log_proxy_span(
+                    provider, req_json, _try_json(cached_body),
+                    200, start_ts, hh, suffix,
+                    cache_state="HIT",
+                )
+                return
+
         upstream_req = urllib.request.Request(
             target, data=body_bytes, headers=upstream_headers, method="POST"
         )
@@ -428,14 +462,25 @@ class IngestHandler(BaseHTTPRequestHandler):
         resp_bytes = upstream.read()
         resp_json = _try_json(resp_bytes)
         ctype = upstream.headers.get("Content-Type") or "application/json"
-        self._send_passthrough(upstream.status, resp_bytes, ctype)
-        self._log_proxy_span(provider, req_json, resp_json, upstream.status, start_ts, hh, suffix)
+        extra: dict | None = None
+        if cache_enabled and cache_key is not None and 200 <= upstream.status < 300:
+            with _cache_lock:
+                _cache[cache_key] = (resp_bytes, ctype)
+            extra = {"helicone-cache": "MISS"}
+        self._send_passthrough(upstream.status, resp_bytes, ctype, extra_headers=extra)
+        self._log_proxy_span(
+            provider, req_json, resp_json, upstream.status, start_ts, hh, suffix,
+            cache_state=("MISS" if extra else None),
+        )
 
-    def _send_passthrough(self, code: int, body: bytes, ctype: str) -> None:
+    def _send_passthrough(self, code: int, body: bytes, ctype: str,
+                          extra_headers: dict | None = None) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        for k, v in (extra_headers or {}).items():
+            self.send_header(k, str(v))
         self.end_headers()
         if body:
             self.wfile.write(body)
@@ -472,7 +517,8 @@ class IngestHandler(BaseHTTPRequestHandler):
         self._log_proxy_span(provider, req_json, resp_json, upstream.status, start_ts, hh, suffix)
 
     def _log_proxy_span(self, provider: str, req_json: dict, resp_json: dict,
-                        status: int, start_ts: float, hh: dict, suffix: str) -> None:
+                        status: int, start_ts: float, hh: dict, suffix: str,
+                        cache_state: str | None = None) -> None:
         end_ts = _now()
         payload = {
             "providerRequest":  {"json": req_json or {}, "url": provider + suffix},
@@ -484,6 +530,8 @@ class IngestHandler(BaseHTTPRequestHandler):
         }
         span = _helicone_to_span(payload, hh)
         span["attrs"]["provider"] = provider
+        if cache_state is not None:
+            span["attrs"]["cache_state"] = cache_state
         if status >= 400:
             span["status"] = "error"
         _append_jsonl(_Config.spans_path, span)
