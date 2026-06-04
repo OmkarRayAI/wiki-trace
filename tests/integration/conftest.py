@@ -35,3 +35,16 @@ def openai_key() -> str:
 @pytest.fixture
 def anthropic_key() -> str:
     return _require_key("ANTHROPIC_API_KEY")
+
+
+@pytest.fixture
+def openrouter_key() -> str:
+    """OpenRouter exposes an OpenAI-protocol-compatible endpoint at
+    https://openrouter.ai/api/v1, so this exercises wikitrace.openai.patch
+    over a real network round-trip without burning OpenAI credits.
+
+    OpenRouter offers a free tier and free-only models (e.g.
+    `mistralai/mistral-small-3.2-24b-instruct:free`); contributors
+    can run this test by signing up at openrouter.ai and exporting
+    OPENROUTER_API_KEY."""
+    return _require_key("OPENROUTER_API_KEY")
