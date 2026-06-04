@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: pytest (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wt
+          POSTGRES_PASSWORD: wt
+          POSTGRES_DB: wikitrace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wt -d wikitrace"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # Postgres tests skip when this isn't a postgres URL; CI sets it
+      # so we exercise the asyncpg path on every push.
+      DATABASE_URL: postgresql://wt:wt@localhost:5432/wikitrace
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # langchain-core is a soft dep of the langchain adapter; install
+          # it so the adapter import path is exercised by `import wikitrace.langchain`
+          # tests if we add them later. Cloud + dev cover the rest.
+          pip install -e '.[cloud,langchain,dev]'
+
+      - name: pytest (full suite, sqlite + postgres)
+        run: |
+          pytest -q tests/ --maxfail=5
+
+  dashboard:
+    name: dashboard typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+  lint:
+    name: lint (compileall)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile every module
+        # Cheap syntax check — catches `def x(:` style errors immediately
+        # without pulling in any dev dependency.
+        run: python -m compileall -q wikitrace tests
