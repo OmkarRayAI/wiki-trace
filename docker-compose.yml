@@ -1,0 +1,55 @@
+# One-command deploy:  docker-compose up -d
+#
+# Brings up:
+#   - wikitrace-cloud   :8001  (multi-tenant ingest + read API)
+#   - wikitrace-dashboard :3000 (sign-in + observability UI)
+#
+# After up:
+#   1. Generate an admin key:    openssl rand -hex 32
+#   2. Set WIKITRACE_CLOUD_ADMIN_KEY in .env (next to this file)
+#   3. docker-compose up -d
+#   4. Create your first tenant:
+#        docker-compose exec wikitrace-cloud \
+#          python -m wikitrace.cloud.admin \
+#            --db /data/wikitrace-cloud.db \
+#            create-tenant --name "My Org"
+#   5. Sign in to http://localhost:3000 with the printed api_key.
+#
+# Self-service signup is also enabled by default — POST /v1/signup with
+# a {name} body returns a fresh api_key. Set WIKITRACE_CLOUD_SIGNUP=disabled
+# on the cloud service if you want admin-only tenant creation.
+
+version: "3.9"
+
+services:
+  wikitrace-cloud:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloud
+    image: wikitrace-cloud:latest
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      WIKITRACE_CLOUD_ADMIN_KEY: ${WIKITRACE_CLOUD_ADMIN_KEY:?set in .env or env var}
+      WIKITRACE_CLOUD_SIGNUP: ${WIKITRACE_CLOUD_SIGNUP:-open}
+    volumes:
+      - wikitrace-data:/data
+
+  wikitrace-dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    image: wikitrace-dashboard:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      WIKITRACE_BACKEND: cloud
+      WIKITRACE_CLOUD_URL: http://wikitrace-cloud:8001
+    depends_on:
+      - wikitrace-cloud
+
+volumes:
+  wikitrace-data:
+    driver: local

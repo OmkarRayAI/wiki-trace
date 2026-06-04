@@ -25,6 +25,12 @@ from typing import Any, AsyncIterator
 import aiosqlite
 
 
+def _days_ago_str(days: int) -> str:
+    from datetime import datetime, timedelta, timezone
+    d = datetime.now(timezone.utc) - timedelta(days=days)
+    return d.strftime("%Y-%m-%d")
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
@@ -60,6 +66,18 @@ CREATE TABLE IF NOT EXISTS traces (
 );
 CREATE INDEX IF NOT EXISTS traces_by_tenant_recent
     ON traces(tenant_id, start_ts DESC);
+
+CREATE TABLE IF NOT EXISTS tenant_usage (
+    tenant_id TEXT NOT NULL REFERENCES tenants(id),
+    day TEXT NOT NULL,                    -- YYYY-MM-DD UTC
+    spans_count INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (tenant_id, day)
+);
+CREATE INDEX IF NOT EXISTS tenant_usage_by_tenant
+    ON tenant_usage(tenant_id, day DESC);
 
 CREATE TABLE IF NOT EXISTS spans (
     tenant_id TEXT NOT NULL REFERENCES tenants(id),
@@ -257,7 +275,25 @@ class Database:
             return 0
         rows = []
         now = time.time()
+        # Aggregate usage delta in one pass — avoids re-scanning spans
+        # later when we bump tenant_usage.
+        cost_delta = 0.0
+        in_t = 0
+        out_t = 0
         for s in spans:
+            attrs = s.get("attrs") or {}
+            try:
+                cost_delta += float(attrs.get("cost_usd") or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                in_t += int(attrs.get("input_tokens") or 0)
+            except (TypeError, ValueError):
+                pass
+            try:
+                out_t += int(attrs.get("output_tokens") or 0)
+            except (TypeError, ValueError):
+                pass
             rows.append((
                 tenant_id,
                 s.get("trace_id"),
@@ -268,7 +304,7 @@ class Database:
                 s.get("start_ts"),
                 s.get("end_ts"),
                 s.get("status"),
-                json.dumps(s.get("attrs") or {}, default=str),
+                json.dumps(attrs, default=str),
                 json.dumps(s.get("events") or [], default=str),
                 now,
             ))
@@ -287,7 +323,80 @@ class Database:
                 rows,
             )
         await self.commit()
+        await self._bump_usage(tenant_id, len(rows), cost_delta, in_t, out_t)
         return len(rows)
+
+    async def _bump_usage(self, tenant_id: str, n_spans: int,
+                          cost_usd: float, input_tokens: int,
+                          output_tokens: int) -> None:
+        """Daily counters per tenant. The ON CONFLICT path increments;
+        first write of the day INSERTs."""
+        if n_spans == 0:
+            return
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        async with self.cursor() as cur:
+            await cur.execute(
+                "INSERT INTO tenant_usage(tenant_id, day, spans_count, "
+                "cost_usd, input_tokens, output_tokens) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(tenant_id, day) DO UPDATE SET "
+                "spans_count = spans_count + excluded.spans_count, "
+                "cost_usd = cost_usd + excluded.cost_usd, "
+                "input_tokens = input_tokens + excluded.input_tokens, "
+                "output_tokens = output_tokens + excluded.output_tokens",
+                (tenant_id, day, n_spans, cost_usd, input_tokens, output_tokens),
+            )
+        await self.commit()
+
+    async def usage_summary(self, tenant_id: str, *, days: int = 30) -> dict:
+        """Roll up the last N days for /v1/me and admin views."""
+        async with self.cursor() as cur:
+            await cur.execute(
+                "SELECT day, spans_count, cost_usd, input_tokens, output_tokens "
+                "FROM tenant_usage WHERE tenant_id = ? "
+                "ORDER BY day DESC LIMIT ?",
+                (tenant_id, days),
+            )
+            rows = await cur.fetchall()
+        spans = sum(r[1] for r in rows)
+        cost = sum(r[2] for r in rows)
+        in_t = sum(r[3] for r in rows)
+        out_t = sum(r[4] for r in rows)
+        return {
+            "days": len(rows),
+            "spans": spans,
+            "cost_usd": round(cost, 6),
+            "input_tokens": in_t,
+            "output_tokens": out_t,
+            "daily": [
+                {"day": r[0], "spans": r[1], "cost_usd": round(r[2], 6),
+                 "input_tokens": r[3], "output_tokens": r[4]}
+                for r in rows
+            ],
+        }
+
+    async def all_tenant_usage(self, *, days: int = 30) -> list[dict]:
+        """Admin overview: top tenants by recent activity."""
+        async with self.cursor() as cur:
+            await cur.execute(
+                "SELECT t.id, t.name, "
+                "       COALESCE(SUM(u.spans_count), 0), "
+                "       COALESCE(SUM(u.cost_usd), 0) "
+                "FROM tenants t "
+                "LEFT JOIN tenant_usage u "
+                "  ON u.tenant_id = t.id "
+                "  AND u.day >= ? "
+                "GROUP BY t.id, t.name "
+                "ORDER BY 3 DESC, 4 DESC",
+                (_days_ago_str(days),),
+            )
+            rows = await cur.fetchall()
+        return [
+            {"tenant_id": r[0], "name": r[1],
+             "spans": int(r[2]), "cost_usd": round(float(r[3]), 6)}
+            for r in rows
+        ]
 
     async def get_trace_spans(self, tenant_id: str, trace_id: str) -> list[dict]:
         async with self.cursor() as cur:
@@ -347,4 +456,15 @@ class Database:
                 (tenant_id,),
             )
             (n_spans,) = await cur.fetchone()
-        return {"tenant_id": tenant_id, "traces": n_traces, "spans": n_spans}
+        usage = await self.usage_summary(tenant_id, days=30)
+        return {
+            "tenant_id": tenant_id,
+            "traces": n_traces,
+            "spans": n_spans,
+            "usage_30d": {
+                "spans": usage["spans"],
+                "cost_usd": usage["cost_usd"],
+                "input_tokens": usage["input_tokens"],
+                "output_tokens": usage["output_tokens"],
+            },
+        }

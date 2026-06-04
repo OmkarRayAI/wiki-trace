@@ -11,14 +11,26 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="wikitrace.cloud.serve")
     p.add_argument("--port", type=int, default=8001)
     p.add_argument("--host", default="127.0.0.1")
-    p.add_argument("--db", default=".wikitrace-cloud.db",
-                   help="aiosqlite file path. For Postgres, swap the "
-                        "Database backend in cloud/db.py.")
+    p.add_argument("--db",
+                   default=os.environ.get("WIKITRACE_CLOUD_DB", ".wikitrace-cloud.db"),
+                   help="aiosqlite file path or DATABASE_URL env var. "
+                        "Postgres support tracked in #4d (use sqlite for now).")
     p.add_argument("--admin-key",
                    default=os.environ.get("WIKITRACE_CLOUD_ADMIN_KEY"),
                    help="Master key for /v1/admin/* routes. Defaults to "
                         "WIKITRACE_CLOUD_ADMIN_KEY env var.")
     args = p.parse_args(argv)
+
+    # Postgres URL? Surface a clear "not yet" rather than silently
+    # creating a sqlite file named "postgres://...".
+    if args.db.startswith(("postgres://", "postgresql://")):
+        print(
+            "[wikitrace] Postgres backend is on the roadmap (Phase 4d). "
+            "For now, point --db at a sqlite file path and unset "
+            "DATABASE_URL.",
+            file=sys.stderr,
+        )
+        return 2
 
     if not args.admin_key:
         print(
