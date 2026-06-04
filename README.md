@@ -549,10 +549,11 @@ pytest -q tests/
 # Postgres and DATABASE_URL set
 DATABASE_URL=postgresql://localhost/wikitrace pytest -q tests/
 
-# Real-API verification (costs pennies; verifies the OpenAI / Anthropic
-# patches against live endpoints): requires a key
-OPENAI_API_KEY=sk-...    pytest -q tests/integration/test_openai_real.py
-ANTHROPIC_API_KEY=sk-... pytest -q tests/integration/test_anthropic_real.py
+# Real-API verification (verifies the patches against live endpoints)
+# OpenRouter is the FREE-TIER path — sign up at openrouter.ai, no card needed.
+OPENROUTER_API_KEY=sk-or-... pytest -q tests/integration/test_openrouter_real.py
+OPENAI_API_KEY=sk-...        pytest -q tests/integration/test_openai_real.py
+ANTHROPIC_API_KEY=sk-ant-... pytest -q tests/integration/test_anthropic_real.py
 ```
 
 Integration tests skip cleanly when the corresponding key is unset, so
