@@ -141,19 +141,16 @@ async def cloud_app_sqlite(tmp_path):
 
     app = create_app(str(tmp_path / "app.db"), "admin-secret")
 
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver",
-    ) as client:
-        # Run startup/shutdown hooks. FastAPI's lifespan handlers are
-        # invoked by ASGITransport when wrapped in a lifespan ctx,
-        # but ASGITransport doesn't run them by default — instead we
-        # poke startup explicitly so init_db + db.connect() fire.
-        await app.router.startup()
-        try:
+    # Older Starlette had `app.router.startup()` / `shutdown()`; newer
+    # versions (used in CI) only expose lifespan_context. The latter
+    # also fires the on_event handlers — so we use it across the
+    # board for compatibility.
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver",
+        ) as client:
             yield client, app
-        finally:
-            await app.router.shutdown()
 
 
 @pytest.fixture
@@ -186,15 +183,12 @@ async def cloud_app_postgres():
     await db.close()
 
     app = create_app(DATABASE_URL, "admin-secret")
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver",
-    ) as client:
-        await app.router.startup()
-        try:
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://testserver",
+        ) as client:
             yield client, app
-        finally:
-            await app.router.shutdown()
 
 
 # ─── Helpers exposed to tests ──────────────────────────────────────────
