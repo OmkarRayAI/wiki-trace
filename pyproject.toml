@@ -82,6 +82,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "postgres: requires DATABASE_URL pointing at a Postgres instance",
+    "integration: hits a real external API; requires the corresponding key in the env",
 ]
 filterwarnings = [
     # FastAPI's deprecated on_event used in the cloud server; suppress

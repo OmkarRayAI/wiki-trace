@@ -1,0 +1,72 @@
+name: ci-real-api
+
+# Real-API verification for the OpenAI / Anthropic adapters.
+# Runs only when the corresponding repo secret is configured AND the
+# workflow is dispatched manually (or on the weekly schedule). Pull
+# requests cannot reach this — the secrets aren't exposed to forks.
+#
+# Cost per run is a fraction of a cent. Set OPENAI_API_KEY and
+# ANTHROPIC_API_KEY in repo Settings → Secrets and Variables → Actions
+# to enable.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Tuesdays 14:00 UTC. Catches upstream API drift roughly weekly
+    # without burning the budget on every push.
+    - cron: "0 14 * * 2"
+
+# Cancel in-progress runs on the same ref so a flaky upstream doesn't
+# queue retries.
+concurrency:
+  group: ci-real-api-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  openai:
+    name: openai (real api)
+    runs-on: ubuntu-latest
+    if: ${{ vars.WIKITRACE_OPENAI_TESTS_ENABLED != 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[cloud,dev]' openai
+      - name: Test
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY secret not set — skipping (this is fine for forks)."
+            exit 0
+          fi
+          pytest -q tests/integration/test_openai_real.py
+
+  anthropic:
+    name: anthropic (real api)
+    runs-on: ubuntu-latest
+    if: ${{ vars.WIKITRACE_ANTHROPIC_TESTS_ENABLED != 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[cloud,dev]' anthropic
+      - name: Test
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "ANTHROPIC_API_KEY secret not set — skipping (this is fine for forks)."
+            exit 0
+          fi
+          pytest -q tests/integration/test_anthropic_real.py
