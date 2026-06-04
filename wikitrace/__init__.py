@@ -24,6 +24,7 @@ from .sdk import (
 )
 from .decorators import trace, tool, eval  # noqa: A004 — shadowing builtin intentional
 from .budget import budget, BudgetExceeded, current_cost, remaining as budget_remaining, check as budget_check
+from .replay import replay_trace, ReplayResult
 
 __version__ = "0.2.0"
 
@@ -36,5 +37,6 @@ __all__ = [
     "trace", "tool", "eval",
     "budget", "BudgetExceeded", "current_cost",
     "budget_remaining", "budget_check",
+    "replay_trace", "ReplayResult",
     "__version__",
 ]
