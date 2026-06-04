@@ -538,6 +538,30 @@ SQL works as-is.
 
 ---
 
+## Tests
+
+```bash
+# Default suite (free): SDK + cloud + ingest server tests
+pip install -e '.[cloud,dev]'
+pytest -q tests/
+
+# Postgres path (asyncpg + JSONB round-trip): requires a running
+# Postgres and DATABASE_URL set
+DATABASE_URL=postgresql://localhost/wikitrace pytest -q tests/
+
+# Real-API verification (costs pennies; verifies the OpenAI / Anthropic
+# patches against live endpoints): requires a key
+OPENAI_API_KEY=sk-...    pytest -q tests/integration/test_openai_real.py
+ANTHROPIC_API_KEY=sk-... pytest -q tests/integration/test_anthropic_real.py
+```
+
+Integration tests skip cleanly when the corresponding key is unset, so
+the default `pytest tests/` invocation never hits an external API.
+CI on every push runs the free + Postgres paths; the real-API workflow
+runs weekly (and on manual dispatch) when repo secrets are configured.
+
+---
+
 ## Pricing
 
 | | |
