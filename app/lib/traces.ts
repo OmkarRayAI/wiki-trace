@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { TRACE_DIR, REPO_ROOT } from "./repo";
+import { getBackend } from "./backend";
 import type {
   Span,
   TraceSummary,
@@ -26,6 +27,10 @@ function readJsonl<T>(p: string): T[] {
 }
 
 let _spansCache: { mtime: number; data: Span[] } | null = null;
+/** Synchronous filesystem read — used by all the legacy server-component
+ * pages built around `const spans = loadSpans()`. Cloud mode pages
+ * should call `loadSpansAsync()` instead so they pick up tenant-scoped
+ * data via the backend abstraction. */
 export function loadSpans(): Span[] {
   if (!fs.existsSync(SPANS)) return [];
   const stat = fs.statSync(SPANS);
@@ -37,6 +42,24 @@ export function loadSpans(): Span[] {
 
 export function loadTraces(): TraceSummary[] {
   return readJsonl<TraceSummary>(TRACES);
+}
+
+// Async variants — go through the backend so cloud-mode pages get
+// tenant-scoped data. In filesystem mode they delegate to loadSpans().
+
+export async function loadSpansAsync(): Promise<Span[]> {
+  const backend = await getBackend();
+  return backend.loadSpans();
+}
+
+export async function loadTracesAsync(): Promise<TraceSummary[]> {
+  const backend = await getBackend();
+  return backend.loadTraces();
+}
+
+export async function loadTraceSpansAsync(traceId: string): Promise<Span[]> {
+  const backend = await getBackend();
+  return backend.loadTraceSpans(traceId);
 }
 
 export function latestScanTraceId(): string | null {
@@ -459,8 +482,8 @@ export type RequestFilter = {
 };
 
 /** All llm_call spans, newest first, optionally filtered. */
-export function loadRequests(filter?: RequestFilter): RequestRow[] {
-  const rows = loadSpans()
+function _loadRequestsFromSpans(spans: Span[], filter?: RequestFilter): RequestRow[] {
+  const rows = spans
     .filter((s) => s.name === "llm_call")
     .map(spanToRequestRow)
     .sort((a, b) => b.start_ts - a.start_ts);
@@ -478,6 +501,14 @@ export function loadRequests(filter?: RequestFilter): RequestRow[] {
   });
 }
 
+export function loadRequests(filter?: RequestFilter): RequestRow[] {
+  return _loadRequestsFromSpans(loadSpans(), filter);
+}
+
+export async function loadRequestsAsync(filter?: RequestFilter): Promise<RequestRow[]> {
+  return _loadRequestsFromSpans(await loadSpansAsync(), filter);
+}
+
 export type SessionRollup = {
   session_id: string;
   session_name?: string;
@@ -490,9 +521,9 @@ export type SessionRollup = {
   models: string[];
 };
 
-export function sessionRollups(): SessionRollup[] {
+function _sessionRollupsFrom(rows: RequestRow[]): SessionRollup[] {
   const out: Record<string, SessionRollup> = {};
-  for (const r of loadRequests()) {
+  for (const r of rows) {
     if (!r.session_id) continue;
     const slot =
       out[r.session_id] ??
@@ -519,6 +550,14 @@ export function sessionRollups(): SessionRollup[] {
   return Object.values(out).sort((a, b) => b.end_ts - a.end_ts);
 }
 
+export function sessionRollups(): SessionRollup[] {
+  return _sessionRollupsFrom(loadRequests());
+}
+
+export async function sessionRollupsAsync(): Promise<SessionRollup[]> {
+  return _sessionRollupsFrom(await loadRequestsAsync());
+}
+
 export type UserRollup = {
   user_id: string;
   request_count: number;
@@ -528,9 +567,9 @@ export type UserRollup = {
   models: string[];
 };
 
-export function userRollups(): UserRollup[] {
+function _userRollupsFrom(rows: RequestRow[]): UserRollup[] {
   const out: Record<string, UserRollup> = {};
-  for (const r of loadRequests()) {
+  for (const r of rows) {
     if (!r.user_id) continue;
     const slot =
       out[r.user_id] ??
@@ -551,6 +590,14 @@ export function userRollups(): UserRollup[] {
   return Object.values(out).sort((a, b) => b.last_seen - a.last_seen);
 }
 
+export function userRollups(): UserRollup[] {
+  return _userRollupsFrom(loadRequests());
+}
+
+export async function userRollupsAsync(): Promise<UserRollup[]> {
+  return _userRollupsFrom(await loadRequestsAsync());
+}
+
 export type PropertyRollup = {
   key: string;
   value: string;
@@ -558,9 +605,9 @@ export type PropertyRollup = {
   total_cost_usd: number;
 };
 
-export function propertyRollups(): PropertyRollup[] {
+function _propertyRollupsFrom(rows: RequestRow[]): PropertyRollup[] {
   const out: Record<string, PropertyRollup> = {};
-  for (const r of loadRequests()) {
+  for (const r of rows) {
     for (const [k, v] of Object.entries(r.properties)) {
       const id = `${k}=${v}`;
       const slot =
@@ -578,15 +625,33 @@ export function propertyRollups(): PropertyRollup[] {
   return Object.values(out).sort((a, b) => b.request_count - a.request_count);
 }
 
+export function propertyRollups(): PropertyRollup[] {
+  return _propertyRollupsFrom(loadRequests());
+}
+
+export async function propertyRollupsAsync(): Promise<PropertyRollup[]> {
+  return _propertyRollupsFrom(await loadRequestsAsync());
+}
+
 export function distinctModels(): string[] {
   const set = new Set<string>();
   for (const r of loadRequests()) set.add(r.model);
   return Array.from(set).sort();
 }
 
+export async function distinctModelsAsync(): Promise<string[]> {
+  const set = new Set<string>();
+  for (const r of await loadRequestsAsync()) set.add(r.model);
+  return Array.from(set).sort();
+}
+
 /** Locate the raw llm_call span for the inspector drawer. */
 export function requestSpanById(spanId: string): Span | null {
   return loadSpans().find((s) => s.id === spanId && s.name === "llm_call") ?? null;
+}
+
+export async function requestSpanByIdAsync(spanId: string): Promise<Span | null> {
+  return (await loadSpansAsync()).find((s) => s.id === spanId && s.name === "llm_call") ?? null;
 }
 
 /** Catalog of built-in judges from wikitrace.judges. Surfaced even when
@@ -637,9 +702,7 @@ export type JudgeScoredRow = {
   ts: number;
 };
 
-/** Aggregate `judge` spans into a per-judge catalog, joined with the
- *  built-in catalog so unused judges still appear (with zeros). */
-export function judgeRollups(): JudgeRollup[] {
+function _judgeRollupsFrom(spans: Span[]): JudgeRollup[] {
   const out: Record<string, JudgeRollup> = {};
   for (const j of BUILTIN_JUDGES) {
     out[j.name] = {
@@ -656,7 +719,7 @@ export function judgeRollups(): JudgeRollup[] {
   }
 
   const runsTouched: Record<string, Set<string>> = {};
-  for (const s of loadSpans()) {
+  for (const s of spans) {
     if (s.name !== "judge") continue;
     const a = s.attrs ?? {};
     const name = String(a.judge ?? "judge");
@@ -686,17 +749,24 @@ export function judgeRollups(): JudgeRollup[] {
     slot.pass_rate = slot.total > 0 ? slot.correct / slot.total : 0;
   }
   return Object.values(out).sort((a, b) => {
-    // Used judges first (most rows), then unused alphabetical.
     if ((a.rows_scored > 0) !== (b.rows_scored > 0)) return a.rows_scored > 0 ? -1 : 1;
     if (a.rows_scored !== b.rows_scored) return b.rows_scored - a.rows_scored;
     return a.name.localeCompare(b.name);
   });
 }
 
-export function judgeScoredRows(name: string, opts?: { limit?: number }): JudgeScoredRow[] {
-  const limit = opts?.limit ?? 200;
+/** Aggregate `judge` spans into a per-judge catalog. */
+export function judgeRollups(): JudgeRollup[] {
+  return _judgeRollupsFrom(loadSpans());
+}
+
+export async function judgeRollupsAsync(): Promise<JudgeRollup[]> {
+  return _judgeRollupsFrom(await loadSpansAsync());
+}
+
+function _judgeScoredRowsFrom(spans: Span[], name: string, limit: number): JudgeScoredRow[] {
   const rows: JudgeScoredRow[] = [];
-  for (const s of loadSpans()) {
+  for (const s of spans) {
     if (s.name !== "judge") continue;
     const a = s.attrs ?? {};
     if (String(a.judge ?? "") !== name) continue;
@@ -716,8 +786,23 @@ export function judgeScoredRows(name: string, opts?: { limit?: number }): JudgeS
   return rows.slice(0, limit);
 }
 
+export function judgeScoredRows(name: string, opts?: { limit?: number }): JudgeScoredRow[] {
+  return _judgeScoredRowsFrom(loadSpans(), name, opts?.limit ?? 200);
+}
+
+export async function judgeScoredRowsAsync(
+  name: string,
+  opts?: { limit?: number },
+): Promise<JudgeScoredRow[]> {
+  return _judgeScoredRowsFrom(await loadSpansAsync(), name, opts?.limit ?? 200);
+}
+
 export function judgeByName(name: string): JudgeRollup | null {
   return judgeRollups().find((j) => j.name === name) ?? null;
+}
+
+export async function judgeByNameAsync(name: string): Promise<JudgeRollup | null> {
+  return (await judgeRollupsAsync()).find((j) => j.name === name) ?? null;
 }
 
 export type EvalQuestion = {

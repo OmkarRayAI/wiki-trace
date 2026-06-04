@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { userRollups } from "@/lib/traces";
+import { userRollupsAsync } from "@/lib/traces";
 import { PageTitle, Empty } from "@/components/widgets";
 
 export const dynamic = "force-dynamic";
@@ -19,8 +19,8 @@ function fmtRel(ts: number) {
   return `${Math.round(diff / 86400)}d ago`;
 }
 
-export default function UsersPage() {
-  const rows = userRollups();
+export default async function UsersPage() {
+  const rows = await userRollupsAsync();
   const totalCost = rows.reduce((a, r) => a + r.total_cost_usd, 0);
   const totalRequests = rows.reduce((a, r) => a + r.request_count, 0);
 
