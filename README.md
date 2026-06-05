@@ -78,6 +78,23 @@ running:
 Get from zero to logged requests in under 60 seconds.
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/OmkarRayAI/wiki-trace/main/scripts/install.sh | bash
+```
+
+That installs the SDK into `~/.wikitrace` (a venv) and prints the one-line
+import you need. Want the multi-tenant cloud server in the same step?
+Append `-s -- --cloud`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OmkarRayAI/wiki-trace/main/scripts/install.sh | bash -s -- --cloud
+```
+
+The script is open source — read it before you pipe anything to bash:
+[`scripts/install.sh`](scripts/install.sh). It does not phone home.
+
+Prefer pip directly?
+
+```bash
 pip install wikitrace
 ```
 
@@ -516,6 +533,32 @@ wikitrace.budget_check()       # raise BudgetExceeded if breached
 
 This is a fast local guardrail, not a substitute for provider-side
 billing limits — those still matter.
+
+### Slack alerts
+
+Wire budget breaches and judge failures to a Slack webhook. Stdlib
+only — no extra deps. The dispatcher runs on a daemon thread with a
+bounded queue, so a slow webhook never blocks the writer or your app.
+
+```bash
+export WIKITRACE_SLACK_WEBHOOK=https://hooks.slack.com/services/T.../B.../...
+```
+
+```python
+import wikitrace.alerts
+wikitrace.alerts.enable()                     # one line
+# or in your app entrypoint:
+wikitrace.alerts.maybe_auto_enable()          # no-op if env not set
+```
+
+What fires:
+- `BudgetExceeded` — once per breach, deduped per active budget
+- Judge failures — any `JudgeResult` with `score < total`
+
+Silence either with `WIKITRACE_ALERT_BUDGETS=0` /
+`WIKITRACE_ALERT_JUDGES=0`. Inspect with `wikitrace.alerts.stats()`
+(sent / failed / dropped / queued). Send a smoke ping with
+`wikitrace.alerts.test_alert("hello")`.
 
 ---
 
