@@ -135,6 +135,42 @@ def test_set_session_imperative(trace_dir: Path):
     assert "session_id" not in spans[1]["attrs"]
 
 
+def test_session_reset_segments_under_same_session_id(trace_dir: Path):
+    """Mid-conversation reset: spans before and after share session_id
+    but carry distinct session_segment ids so the dashboard can render
+    them as separate threads while cost rollups still group them."""
+    wt.init(pipeline="t", trace_dir=trace_dir)
+    with wt.session(id="conv-1", user="alice"):
+        with wt.span("turn-A"):
+            pass
+        new_seg = wt.session_reset()
+        assert new_seg == 1
+        with wt.span("turn-B"):
+            pass
+        new_seg = wt.session_reset()
+        assert new_seg == 2
+        with wt.span("turn-C"):
+            pass
+    wt.end()
+
+    spans = {s["name"]: s for s in _read_spans(trace_dir)}
+    # All three turns share the same session_id.
+    assert spans["turn-A"]["attrs"]["session_id"] == "conv-1"
+    assert spans["turn-B"]["attrs"]["session_id"] == "conv-1"
+    assert spans["turn-C"]["attrs"]["session_id"] == "conv-1"
+    # First turn has no segment attr (segment 0 = original); subsequent
+    # turns carry incrementing segment ids.
+    assert spans["turn-A"]["attrs"].get("session_segment") in (None, 0)
+    assert spans["turn-B"]["attrs"]["session_segment"] == 1
+    assert spans["turn-C"]["attrs"]["session_segment"] == 2
+
+
+def test_session_reset_outside_session_is_noop():
+    """Calling session_reset() with no active session returns 0 and
+    does not raise — so library code can call it defensively."""
+    assert wt.session_reset() == 0
+
+
 def test_async_gather_no_parent_id_contamination(trace_dir: Path):
     """5 concurrent async tasks each open + close their own span. No
     span should see another task's span as parent."""
