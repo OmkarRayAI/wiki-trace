@@ -23,10 +23,28 @@ self-hosted, zero telemetry exfiltration, one line of code.
 
 ---
 
-## What it is
+## In one minute
 
-wiki-trace is the open-source telemetry layer the OpenAI and Anthropic
-SDKs don't ship with. Drop it next to whatever you're already running:
+You're building an LLM app. You ship to production. Now you need to
+know: which prompts are slow, what's it costing, why did that agent
+step fail, who's burning the budget?
+
+The OpenAI and Anthropic SDKs don't ship with telemetry. Tools that
+solve this — Helicone, Phoenix, LangSmith, Weave, Datadog LLM — are
+all SaaS. Your conversations get sent to a third party.
+
+**wiki-trace is the open-source, self-hosted alternative.** Add one
+line of code and every LLM call becomes a traceable event with cost,
+tokens, latency, and replay-ability — running entirely on your
+infrastructure.
+
+```python
+import wikitrace.openai
+wikitrace.openai.patch()        # one line. every request now traced.
+```
+
+That's the whole onboarding. Drop it next to whatever you're already
+running:
 
 - 🐍 **Python SDK** — one-line `patch()` for OpenAI / Anthropic /
   OpenRouter (sync, async, streaming). Decorators for any function.
@@ -47,24 +65,11 @@ SDKs don't ship with. Drop it next to whatever you're already running:
 
 **Open-source. Apache-2.0 / MIT. Your data never leaves your machine.**
 
----
-
-## Why wiki-trace
-
-Building with LLMs is easy. Shipping them is hard. wiki-trace gives
-you the observability layer the OpenAI and Anthropic SDKs don't ship
-with:
-
-- **Logs** — every request, response, model, latency, and token count, captured automatically.
-- **Costs** — built-in price table for 100+ models. See spend by user, session, environment, model.
-- **Sessions** — group multi-step agent runs into one replayable trace. Planner → tool → reflect → answer renders as a tree.
-- **Custom Properties** — tag any request with arbitrary metadata. Slice your dashboard by tenant, feature flag, deploy SHA, anything.
-- **User Metrics** — attribute usage, cost, and latency to end users. Spot the power users and the runaway costs.
-- **Evaluators** — score outputs with built-in judges or your own LLM-as-judge rubrics.
-- **Datasets & Experiments** — version your test sets, run experiments, compare results.
-- **OpenTelemetry export** — pipe everything into Phoenix, Datadog, Honeycomb, Grafana, or any OTLP collector.
-
-Open-source. Self-hosted. Your data never leaves your infrastructure.
+> **Heads up on the name.** "wiki-trace" is a legacy from v0.1, when
+> this project was a wiki/knowledge curation tool. It's now a
+> general-purpose LLM observability platform. The name is sticking
+> for now to preserve the GitHub URL and momentum — think of it as a
+> codename. The product is the tracer.
 
 ---
 
