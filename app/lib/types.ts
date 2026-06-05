@@ -120,3 +120,73 @@ export type Contrib = {
   agents: string[];
   qids: string[];
 };
+
+// ─── Signal / comment / alert types ──────────────────────────────────────
+//
+// Used by the dashboard's alerts + signals + comments surfaces. Shapes
+// derived from the only authoritative usage site: app/lib/signals.ts
+// (detector pipeline) and app/api/comments/route.ts (POST handler).
+// Kept narrow on purpose — these surfaces are still in flux; better
+// to widen later than to over-specify and lock in the wrong shape.
+
+/** What kind of failure/event a signal flags. Keep this in sync with
+ *  SIGNAL_LABEL / SIGNAL_TONE in app/lib/signals.ts. */
+export type SignalKind =
+  | "forgetting"
+  | "task_failure"
+  | "frustration"
+  | "nsfw"
+  | "jailbreak"
+  | "laziness"
+  | "win"
+  | "asr_low_confidence"
+  | "dead_air"
+  | "barge_in_mishandled"
+  | "broken_link"
+  | "tool_error"
+  | "loop"
+  | "hallucination";
+
+export type Severity = "low" | "med" | "high";
+
+export type Modality = "chat" | "voice" | "agent" | "rag";
+
+/** One detected event on a span. Built by detectors in
+ *  app/lib/signals.ts; consumed by the timeline / alerts views. */
+export type Signal = {
+  id: string;
+  trace_id: string;
+  span_id: string;
+  kind: SignalKind;
+  severity: Severity;
+  source: "builtin" | "user";
+  title: string;
+  evidence: string;
+  ts: number;
+  modality: Modality;
+};
+
+/** A comment pinned to a specific span (not a whole trace). Append-only
+ *  via POST /api/comments. */
+export type SpanComment = {
+  id: string;
+  trace_id: string;
+  span_id: string;
+  author: string;
+  text: string;
+  ts: number;
+};
+
+/** A historical record of an alert rule firing. Read by the dashboard's
+ *  /alerts page; written by whatever evaluates rules (not yet wired in
+ *  this branch — the page falls back to computing live `eligible` rules
+ *  off loadSignals()). */
+export type AlertFiring = {
+  id: string;
+  kind: SignalKind;
+  count: number;
+  threshold: number;
+  window_min: number;
+  channel: string;
+  ts: number;
+};
