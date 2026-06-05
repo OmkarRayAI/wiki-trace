@@ -16,6 +16,14 @@ Why have this on top of the OpenAI test:
 
 Cost: free with `:free` model variants; otherwise pennies.
 Skipped when OPENROUTER_API_KEY is unset.
+
+Why we disable retries
+----------------------
+The :free OpenRouter pool is shared and frequently hits upstream
+rate limits. Our patch's retry-with-backoff would dutifully wait
+~7 minutes before bubbling the 429 — fine in production, terrible
+in CI. We disable retries via env so transient 429s fail the test
+fast (in seconds) and CI can re-run on the next cron tick.
 """
 
 from __future__ import annotations
@@ -26,18 +34,25 @@ from pathlib import Path
 
 import pytest
 
-import wikitrace as wt
+# Disable wikitrace's retry-with-backoff for these tests BEFORE the
+# patch reads the env var. _retry pulls _DEFAULT_MAX_RETRIES from env
+# at import time, so we have to set it here, before the wrapper
+# captures the default.
+os.environ.setdefault("WIKITRACE_MAX_RETRIES", "0")
+
+import wikitrace as wt  # noqa: E402  must follow env override
 
 
 pytestmark = pytest.mark.integration
 
 
 # OpenRouter free-tier model. The :free suffix routes to a no-cost
-# instance; if the upstream model is renamed, override via
-# WIKITRACE_OPENROUTER_TEST_MODEL.
+# instance; if the upstream model is renamed or rate-limited, override
+# via WIKITRACE_OPENROUTER_TEST_MODEL. Verified working: the Liquid
+# LFM 2.5 1.2B model is small enough to be reliably available.
 DEFAULT_FREE_MODEL = os.environ.get(
     "WIKITRACE_OPENROUTER_TEST_MODEL",
-    "mistralai/mistral-small-3.2-24b-instruct:free",
+    "liquid/lfm-2.5-1.2b-instruct:free",
 )
 
 
