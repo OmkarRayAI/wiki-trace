@@ -290,6 +290,24 @@ awkward (FastAPI middleware, Celery tasks).
 The SDK uses `contextvars`, so concurrent `asyncio.gather` tasks each
 keep their own span stack. No cross-task `parent_id` contamination.
 
+### Mid-conversation resets
+
+When a user clears chat history or a planner restarts from a checkpoint
+mid-trace, call `wikitrace.session_reset()` to mark the boundary.
+Spans before and after share the same `session_id` (cost rollups and
+user attribution stay grouped) but carry distinct `session_segment`
+integers so the dashboard renders them as separate threads.
+
+```python
+with wikitrace.session(id="conv-1", user="alice"):
+    chain.invoke({"input": q1})              # session_segment=0
+    wikitrace.session_reset()                # → 1
+    chain.invoke({"input": "start over"})    # session_segment=1
+```
+
+Outside an active session it's a no-op — safe to call from library
+code that doesn't know whether tracing is active.
+
 ---
 
 ## Custom Properties

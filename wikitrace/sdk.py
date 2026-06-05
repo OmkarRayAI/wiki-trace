@@ -397,3 +397,39 @@ def set_session(
 
 def clear_session() -> None:
     _session_attrs.set({})
+
+
+def session_reset() -> int:
+    """Close the current conversation segment and start a new one
+    under the same ``session_id``.
+
+    Use this when an agent's conversation history is reset mid-trace
+    (user clears chat, planner restarts from a checkpoint, evaluator
+    rolls back state). Spans before and after the reset still share
+    the same ``session_id`` — so cost rollups, user attribution, and
+    "all activity for this user this hour" queries continue to group
+    them — but they carry distinct ``session_segment`` integers so
+    the dashboard can render them as separate threads.
+
+    Returns the new segment number (starts at 1; increments with each
+    call). Outside an active session this is a no-op and returns 0.
+
+    Example::
+
+        with wikitrace.session(id="conv-1", user="alice"):
+            chain.invoke({"input": q1})            # segment 0
+            wikitrace.session_reset()              # bumps to segment 1
+            chain.invoke({"input": "start over"})  # segment 1
+    """
+    cur = _ambient_session()
+    if not cur.get("session_id"):
+        # No active session_id → nothing to segment. Returning 0
+        # rather than raising so downstream `wikitrace.session_reset()`
+        # calls in shared library code don't crash callers that
+        # forgot to wrap them in `session()`.
+        return 0
+    next_seg = int(cur.get("session_segment") or 0) + 1
+    new = dict(cur)
+    new["session_segment"] = next_seg
+    _session_attrs.set(new)
+    return next_seg
