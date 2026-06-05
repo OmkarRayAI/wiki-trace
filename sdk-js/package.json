@@ -1,7 +1,7 @@
 {
   "name": "wikitrace",
   "version": "0.2.0",
-  "description": "Local-first LLM tracing for JS/TS. Mirrors the Python wikitrace SDK and emits spans to a wikitrace ingest server.",
+  "description": "Local-first tracing for RAG and agentic LLM apps in JS/TS. Mirrors the Python wikitrace SDK and emits spans to a wikitrace ingest server.",
   "license": "MIT",
   "author": "Omkar Ray",
   "homepage": "https://github.com/OmkarRayAI/wiki-trace",
@@ -37,6 +37,8 @@
   "keywords": [
     "llm",
     "rag",
+    "agents",
+    "agentic",
     "tracing",
     "observability",
     "evaluation",

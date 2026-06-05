@@ -39,10 +39,10 @@ either user demand or external resources to start.
 - **Native LangSmith protocol compat** so anyone pointed at LangSmith
   can swap base URL → wikitrace, same way the Helicone-compat
   endpoints already work.
-- **Browser dashboard for streaming traces** — currently the
+- **Browser dashboard for live text traces** — currently the
   `/contribution` and `/requests` routes paint on page load. A live
   `EventSource`-fed view over `spans-live.jsonl` would close the
-  "watch your agent run" gap.
+  "watch your RAG or agent pipeline run" gap.
 - **Compliance certifications** — SOC 2 Type 1, HIPAA. Customer-driven;
   not on the path for self-hosted users.
 
@@ -52,6 +52,10 @@ either user demand or external resources to start.
   metrics to whatever ID it returns.
 - A model gateway. We use OpenRouter as the default but never proxy
   inference for billing; the proxy mode is for telemetry only.
+- Voice / audio / multimodal-realtime tracing. The span model is
+  text-completion shaped (prompt_chars, output_tokens, token deltas);
+  voice agents have an entirely different latency budget, audio
+  format, and cost model. Out of scope by design.
 - Telemetry exfiltration. Customer data never leaves their machine.
 
 ---
