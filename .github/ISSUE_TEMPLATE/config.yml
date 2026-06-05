@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security report
+    url: https://github.com/OmkarRayAI/wiki-trace/blob/main/SECURITY.md
+    about: Don't open a public issue. See SECURITY.md for the disclosure path.
+  - name: Question or discussion
+    url: https://github.com/OmkarRayAI/wiki-trace/discussions
+    about: For "how do I..." questions, design discussions, or feedback.

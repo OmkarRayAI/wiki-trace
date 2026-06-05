@@ -1,18 +1,51 @@
+<div align="center">
+
 # wiki-trace
 
-> The observability platform for Generative AI.
+**The open-source observability platform for LLM applications.**
 
-**wiki-trace** is the open-source platform developers use to monitor,
-debug, and improve production-ready LLM applications. Get instant
-insights into latency, costs, and quality — without changing how you
-build.
+Trace every request, cost, and agent step in production —
+self-hosted, zero telemetry exfiltration, one line of code.
 
-One line of code. Every request logged. Every cost tracked. Every
-agent step replayable.
+[![CI](https://github.com/OmkarRayAI/wiki-trace/actions/workflows/ci.yml/badge.svg)](https://github.com/OmkarRayAI/wiki-trace/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/wikitrace.svg)](https://pypi.org/project/wikitrace/)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://pypi.org/project/wikitrace/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/OmkarRayAI/wiki-trace?style=social)](https://github.com/OmkarRayAI/wiki-trace/stargazers)
 
-[Quick start](#quick-start) · [Integrations](#integrations) ·
-[Sessions](#sessions) · [Custom Properties](#custom-properties) ·
-[Evaluators](#evaluators) · [Datasets & Experiments](#datasets--experiments)
+[Quick start](#quick-start) ·
+[Integrations](#integrations) ·
+[Self-hosted cloud](#self-hosted-cloud) ·
+[Roadmap](ROADMAP.md) ·
+[Discussions](https://github.com/OmkarRayAI/wiki-trace/discussions)
+
+</div>
+
+---
+
+## What it is
+
+wiki-trace is the open-source telemetry layer the OpenAI and Anthropic
+SDKs don't ship with. Drop it next to whatever you're already running:
+
+- 🐍 **Python SDK** — one-line `patch()` for OpenAI / Anthropic /
+  OpenRouter (sync, async, streaming). Decorators for any function.
+  Stdlib core; ~750 LOC.
+- 🟦 **JS/TS SDK** — same API surface in Node + browsers.
+- 🌐 **HTTP ingest** — POST JSON from any language; speaks the
+  Helicone async-log protocol natively (drop-in compatible).
+- 📊 **Next.js dashboard** — Helicone-style requests, sessions, users,
+  properties, evaluators, page-contribution.
+- 🧪 **16 built-in evaluators** — exact match, contains, JSON / SQL /
+  schema / PII / safety, plus LLM-as-judge (Phoenix-style).
+- 🔁 **Multi-step replay** — re-drive a recorded trace through a new
+  model, diff outcomes per question.
+- ☁️ **Self-hosted multi-tenant cloud** — FastAPI + Postgres or SQLite,
+  API-key auth, per-tenant isolation, one-command `docker compose up`.
+- 📡 **OpenTelemetry export** — pipe spans into Phoenix, Datadog,
+  Honeycomb, Grafana, or any OTLP collector.
+
+**Open-source. Apache-2.0 / MIT. Your data never leaves your machine.**
 
 ---
 
@@ -627,8 +660,11 @@ PRD.md                 product requirements / pitch
 
 ## Community
 
-- **GitHub Issues** — report bugs, request integrations.
-- **Pull requests** — welcome. The codebase is small enough that you can read the whole thing in an afternoon.
+- **[GitHub Discussions](https://github.com/OmkarRayAI/wiki-trace/discussions)** — questions, design discussion, feedback.
+- **[GitHub Issues](https://github.com/OmkarRayAI/wiki-trace/issues)** — bugs, integration requests, feature requests. Templates included.
+- **[Roadmap](ROADMAP.md)** — what's next, with reasoning.
+- **[Contributing guide](CONTRIBUTING.md)** — small repo; you can read the whole thing in an afternoon.
+- **[Security policy](SECURITY.md)** — coordinated disclosure.
 
 The core principles, in order:
 
@@ -636,6 +672,12 @@ The core principles, in order:
 2. **The wiki is data, not code.** The dashboard reads `wiki/*.md` on every request.
 3. **Findings are spans.** Detection rules write `finding:<rule>` spans rather than a separate table.
 4. **No telemetry exfiltration.** Customer data never leaves the user's machine.
+
+If wiki-trace saves you time, **a [star on GitHub](https://github.com/OmkarRayAI/wiki-trace) is the cheapest way to say thanks** — it directly shapes how many other developers find this project.
+
+## Star history
+
+[![Star History Chart](https://api.star-history.com/svg?repos=OmkarRayAI/wiki-trace&type=Date)](https://star-history.com/#OmkarRayAI/wiki-trace&Date)
 
 ---
 

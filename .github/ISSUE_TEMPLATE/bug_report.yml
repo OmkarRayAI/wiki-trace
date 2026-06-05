@@ -1,0 +1,63 @@
+name: Bug report
+description: Something works incorrectly or crashes.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. Smaller repros get fixed faster.
+        wiki-trace stores its state as JSONL on disk — pasting the
+        first few lines of `.wikitrace/spans.jsonl` is usually all
+        the diagnostic data we need.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, what did you observe?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Repro
+      description: Smallest possible script + commands.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: wikitrace version
+      description: e.g. `0.2.1` or commit SHA
+      placeholder: "0.2.1"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      placeholder: "3.12.3"
+    validations:
+      required: false
+
+  - type: input
+    id: provider
+    attributes:
+      label: Provider / framework (if relevant)
+      placeholder: "openai 1.40 / langchain-core 0.3.5 / crewai 0.70"
+    validations:
+      required: false
+
+  - type: textarea
+    id: span-snippet
+    attributes:
+      label: Relevant spans (if relevant)
+      description: A few lines from `.wikitrace/spans.jsonl` near the issue.
+      render: json
+    validations:
+      required: false
