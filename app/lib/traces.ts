@@ -845,6 +845,14 @@ export type AgentRollup = {
   user_id?: string;
 };
 
+/** Sum cost / tokens / structural counts across the subtree rooted
+ *  at `rootId`. Exported so the trace tree-view page can decorate
+ *  agent_call nodes with their subtree totals without re-loading
+ *  spans. Mirror of Python's `wikitrace.agents.tree_cost`. */
+export function treeCostFromSpans(spans: Span[], rootId: string): AgentRollup | null {
+  return _treeCostFromSpans(spans, rootId);
+}
+
 function _treeCostFromSpans(spans: Span[], rootId: string): AgentRollup | null {
   const byId = new Map(spans.map((s) => [s.id, s]));
   const root = byId.get(rootId);
