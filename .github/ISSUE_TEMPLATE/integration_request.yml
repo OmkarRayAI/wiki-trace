@@ -1,0 +1,41 @@
+name: Integration request
+description: A framework, provider, or tool you want wiki-trace to support.
+title: "[integration] "
+labels: ["integration"]
+body:
+  - type: input
+    id: name
+    attributes:
+      label: What framework / provider / tool?
+      placeholder: "LlamaIndex, OpenAI Assistants, Haystack, Bedrock, ..."
+    validations:
+      required: true
+
+  - type: input
+    id: link
+    attributes:
+      label: Link to its docs / SDK
+      placeholder: "https://..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: How are you using it today?
+      description: |
+        What does your stack look like? Are you running this in
+        production, eval, or just exploring?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: would-you-help
+    attributes:
+      label: Would you be willing to help test?
+      options:
+        - "Yes — I can run a draft adapter against my real stack"
+        - "Maybe — depends on the time commitment"
+        - "No — just filing the request"
+    validations:
+      required: true

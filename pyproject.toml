@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "wikitrace"
 version = "0.2.0"
-description = "Knowledge quality tracing for LLM features. Drop a PDF, ask a question, see every citation traced."
+description = "Open-source observability for LLM apps: trace every request, cost, and agent step. Self-hosted, MIT."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }

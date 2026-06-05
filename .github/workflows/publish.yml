@@ -1,0 +1,95 @@
+name: publish
+
+# Publishes to PyPI when a `v*` tag is pushed.
+#
+# Setup (one-time):
+#   1. Create a PyPI account, generate a project-scoped API token at
+#      https://pypi.org/manage/account/token/
+#   2. In repo Settings → Secrets → Actions, add PYPI_API_TOKEN
+#   3. Tag a release: `git tag v0.2.1 && git push origin v0.2.1`
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  pypi:
+    name: PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for PyPI Trusted Publishing (no API token needed once
+      # configured at https://pypi.org/manage/account/publishing/).
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Verify dist
+        run: |
+          python -m pip install twine
+          python -m twine check dist/*
+
+      - name: Publish to PyPI (trusted publishing)
+        # If you've configured Trusted Publishing on PyPI, no token is
+        # needed — id-token: write above is enough.
+        # Otherwise, fall back to API token: comment out this step and
+        # uncomment the one below.
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+      # Fallback: API token. Uncomment if Trusted Publishing isn't set up.
+      # - name: Publish to PyPI (API token)
+      #   env:
+      #     TWINE_USERNAME: __token__
+      #     TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+      #   run: python -m twine upload dist/*
+
+  npm:
+    name: npm (sdk-js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk-js
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+          cache-dependency-path: sdk-js/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then
+            echo "NPM_TOKEN secret not set — skipping JS publish."
+            exit 0
+          fi
+          # Only publish if the tag's version matches package.json
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "package.json version ($PKG_VERSION) != tag ($TAG_VERSION) — skipping."
+            exit 0
+          fi
+          npm publish --access public
