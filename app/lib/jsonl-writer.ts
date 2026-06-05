@@ -95,3 +95,13 @@ export class TraceBuilder {
     fs.appendFileSync(TRACES, JSON.stringify(summary) + "\n");
   }
 }
+
+
+/** Append a single JSON record to a JSONL file in the trace dir.
+ *  Used by the comments API route (POST /api/comments → comments.jsonl)
+ *  and any other lightweight append-only event log the dashboard owns. */
+export function appendJsonl<T>(filename: string, record: T): void {
+  fs.mkdirSync(TRACE_DIR, { recursive: true });
+  const target = path.join(TRACE_DIR, filename);
+  fs.appendFileSync(target, JSON.stringify(record) + "\n");
+}
