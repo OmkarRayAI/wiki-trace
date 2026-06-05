@@ -25,6 +25,7 @@ from .sdk import (
 from .decorators import trace, tool, eval  # noqa: A004 — shadowing builtin intentional
 from .budget import budget, BudgetExceeded, current_cost, remaining as budget_remaining, check as budget_check
 from .replay import replay_trace, ReplayResult
+from .agents import tree_cost, agent_rollups, CostRollup
 from . import alerts  # noqa: F401  side-effect-free, opt-in via alerts.enable()
 
 __version__ = "0.2.0"
@@ -39,6 +40,7 @@ __all__ = [
     "budget", "BudgetExceeded", "current_cost",
     "budget_remaining", "budget_check",
     "replay_trace", "ReplayResult",
+    "tree_cost", "agent_rollups", "CostRollup",
     "alerts",
     "__version__",
 ]

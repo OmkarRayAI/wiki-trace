@@ -805,6 +805,149 @@ export async function judgeByNameAsync(name: string): Promise<JudgeRollup | null
   return (await judgeRollupsAsync()).find((j) => j.name === name) ?? null;
 }
 
+/**
+ * Subagent cost rollup at the agent_call level — mirror of the
+ * Python `wikitrace.agents.tree_cost` / `agent_rollups` API.
+ *
+ * Top-level agent_call spans (those whose parent is null OR whose
+ * parent is NOT an agent_call) are rolled up to show the total
+ * cost the parent caused: sum of cost_usd, input/output tokens,
+ * count of nested agent_calls, llm_calls, tool_calls, errors,
+ * tree depth.
+ *
+ * This closes the Twitter feedback gap: "does it work for subagent
+ * convos? cost is dictated by those now." The data model already
+ * supported nesting; this rollup makes it usable.
+ */
+export type AgentRollup = {
+  span_id: string;
+  trace_id: string;
+  agent: string | null;
+  pipeline: string | null;
+  start_ts: number;
+  end_ts: number | null;
+  status: "ok" | "error";
+  // Rolled-up totals across the subtree.
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  // Structural counts.
+  descendants: number;
+  llm_calls: number;
+  tool_calls: number;
+  agent_calls: number; // nested subagents below this root
+  errors: number;
+  depth: number;
+  latency_ms: number | null;
+  // Session context (when present on the root agent_call).
+  session_id?: string;
+  user_id?: string;
+};
+
+function _treeCostFromSpans(spans: Span[], rootId: string): AgentRollup | null {
+  const byId = new Map(spans.map((s) => [s.id, s]));
+  const root = byId.get(rootId);
+  if (!root) return null;
+
+  // children index
+  const childrenOf = new Map<string | null, Span[]>();
+  for (const s of spans) {
+    const p = s.parent_id ?? null;
+    if (!childrenOf.has(p)) childrenOf.set(p, []);
+    childrenOf.get(p)!.push(s);
+  }
+
+  const a = root.attrs ?? {};
+  const rollup: AgentRollup = {
+    span_id: root.id,
+    trace_id: root.trace_id,
+    agent: (a.agent as string | undefined) ?? null,
+    pipeline: root.pipeline ?? null,
+    start_ts: root.start_ts ?? 0,
+    end_ts: root.end_ts ?? null,
+    status: (root.status as "ok" | "error") ?? "ok",
+    cost_usd: 0,
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    descendants: 0,
+    llm_calls: 0,
+    tool_calls: 0,
+    agent_calls: 0,
+    errors: 0,
+    depth: 0,
+    latency_ms:
+      root.start_ts != null && root.end_ts != null
+        ? Math.round((root.end_ts - root.start_ts) * 1000)
+        : null,
+    session_id: a.session_id as string | undefined,
+    user_id: a.user_id as string | undefined,
+  };
+
+  type QItem = { node: Span; depth: number };
+  const queue: QItem[] = [{ node: root, depth: 0 }];
+  while (queue.length > 0) {
+    const { node, depth } = queue.shift()!;
+    const na = node.attrs ?? {};
+
+    const cost = Number(na.cost_usd);
+    if (Number.isFinite(cost)) rollup.cost_usd += cost;
+    const inT = Number(na.input_tokens);
+    if (Number.isFinite(inT)) rollup.input_tokens += inT;
+    const outT = Number(na.output_tokens);
+    if (Number.isFinite(outT)) rollup.output_tokens += outT;
+    const tot = Number(na.total_tokens);
+    if (Number.isFinite(tot)) rollup.total_tokens += tot;
+
+    if (node.id !== rootId) {
+      rollup.descendants += 1;
+      if (node.name === "llm_call") rollup.llm_calls += 1;
+      else if (node.name === "tool_call") rollup.tool_calls += 1;
+      else if (node.name === "agent_call") rollup.agent_calls += 1;
+    }
+    if (node.status === "error") rollup.errors += 1;
+    if (depth > rollup.depth) rollup.depth = depth;
+
+    for (const c of childrenOf.get(node.id) ?? []) {
+      queue.push({ node: c, depth: depth + 1 });
+    }
+  }
+
+  return rollup;
+}
+
+function _agentRollupsFromSpans(
+  spans: Span[],
+  opts?: { onlyTopLevel?: boolean; limit?: number },
+): AgentRollup[] {
+  const onlyTopLevel = opts?.onlyTopLevel ?? true;
+  const byId = new Map(spans.map((s) => [s.id, s]));
+  const roots: Span[] = [];
+  for (const s of spans) {
+    if (s.name !== "agent_call") continue;
+    if (onlyTopLevel) {
+      const parent = s.parent_id ? byId.get(s.parent_id) : undefined;
+      if (parent && parent.name === "agent_call") continue;
+    }
+    roots.push(s);
+  }
+  const out: AgentRollup[] = [];
+  for (const r of roots) {
+    const rollup = _treeCostFromSpans(spans, r.id);
+    if (rollup) out.push(rollup);
+  }
+  out.sort((a, b) => b.start_ts - a.start_ts);
+  if (opts?.limit != null) return out.slice(0, opts.limit);
+  return out;
+}
+
+export async function agentRollupsAsync(
+  opts?: { onlyTopLevel?: boolean; limit?: number },
+): Promise<AgentRollup[]> {
+  return _agentRollupsFromSpans(await loadSpansAsync(), opts);
+}
+
 export type EvalQuestion = {
   id: string;
   question: string;
