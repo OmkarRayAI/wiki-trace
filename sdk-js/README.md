@@ -1,7 +1,8 @@
 # wikitrace (JS / TypeScript)
 
-Local-first LLM tracing for Node and the browser. Mirrors the Python
-wikitrace SDK and emits spans to a wikitrace ingest server over HTTP.
+Local-first tracing for RAG and agentic LLM applications in Node and
+the browser. Mirrors the Python wikitrace SDK and emits spans to a
+wikitrace ingest server over HTTP.
 
 ## Install
 

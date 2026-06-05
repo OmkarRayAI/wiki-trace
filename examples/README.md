@@ -4,9 +4,9 @@ Each script is self-contained and runnable in under 30 seconds.
 
 | Script | What it shows |
 |---|---|
-| [`openai_quickstart.py`](openai_quickstart.py) | One-line OpenAI / OpenRouter auto-patching with cost + streaming |
+| [`openai_quickstart.py`](openai_quickstart.py) | One-line OpenAI / OpenRouter auto-patching with cost + token streaming |
 | [`anthropic_quickstart.py`](anthropic_quickstart.py) | One-line Anthropic auto-patching |
-| [`decorators_quickstart.py`](decorators_quickstart.py) | `@trace` and `@tool` for arbitrary Python (sync + async) |
+| [`decorators_quickstart.py`](decorators_quickstart.py) | `@trace` and `@tool` for RAG and agent steps in Python (sync + async) |
 | [`eval_quickstart.py`](eval_quickstart.py) | Dataset, judges, `run_eval`, `compare_runs` — no LLM required |
 | [`budget_quickstart.py`](budget_quickstart.py) | Cost budgeting with `wikitrace.budget(usd=...)` |
 | [`langchain_rag.py`](langchain_rag.py) | LangChain `WikitraceCallbackHandler` end-to-end |

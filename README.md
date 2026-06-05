@@ -2,7 +2,7 @@
 
 # wiki-trace
 
-**The open-source observability platform for LLM applications.**
+**The open-source observability platform for RAG and agentic LLM applications.**
 
 Trace every request, cost, and agent step in production —
 self-hosted, zero telemetry exfiltration, one line of code.
@@ -34,9 +34,9 @@ solve this — Helicone, Phoenix, LangSmith, Weave, Datadog LLM — are
 all SaaS. Your conversations get sent to a third party.
 
 **wiki-trace is the open-source, self-hosted alternative.** Add one
-line of code and every LLM call becomes a traceable event with cost,
-tokens, latency, and replay-ability — running entirely on your
-infrastructure.
+line of code and every text LLM call in your RAG or agent pipeline
+becomes a traceable event with cost, tokens, latency, and replay-ability
+— running entirely on your infrastructure.
 
 ```python
 import wikitrace.openai
@@ -66,8 +66,8 @@ running:
 **Open-source. Apache-2.0 / MIT. Your data never leaves your machine.**
 
 > **Heads up on the name.** "wiki-trace" is a legacy from v0.1, when
-> this project was a wiki/knowledge curation tool. It's now a
-> general-purpose LLM observability platform. The name is sticking
+> this project was a wiki/knowledge curation tool. It's now an
+> observability platform for RAG and agentic LLM applications. The name is sticking
 > for now to preserve the GitHub URL and momentum — think of it as a
 > codename. The product is the tracer.
 
@@ -135,8 +135,9 @@ cd app && npm install && npm run dev
 
 ## Integrations
 
-wiki-trace is LLM-agnostic and framework-agnostic. Drop it in next to
-whatever you're already running.
+wiki-trace is provider- and framework-agnostic across text LLM APIs
+used in RAG and agent workflows. Drop it in next to whatever you're
+already running.
 
 | Provider / Framework | Integration | Status |
 |---|---|---|

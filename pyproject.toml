@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "wikitrace"
 version = "0.2.0"
-description = "Open-source observability for LLM apps: trace every request, cost, and agent step. Self-hosted, MIT."
+description = "Open-source observability for RAG and agentic LLM apps: trace every request, cost, and agent step. Self-hosted, MIT."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [
     { name = "Omkar Ray" }
 ]
-keywords = ["llm", "rag", "observability", "tracing", "evaluation", "langchain", "llamaindex"]
+keywords = ["llm", "rag", "agents", "agentic", "observability", "tracing", "evaluation", "langchain", "llamaindex"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
